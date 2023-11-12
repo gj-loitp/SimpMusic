@@ -6,12 +6,15 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
+import com.maxrave.simpmusic.R
 import com.maxrave.simpmusic.common.DownloadState
 import com.maxrave.simpmusic.data.db.entities.LocalPlaylistEntity
+import com.maxrave.simpmusic.data.db.entities.PairSongLocalPlaylist
 import com.maxrave.simpmusic.data.db.entities.SongEntity
 import com.maxrave.simpmusic.data.repository.MainRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
+import java.time.LocalDateTime
 import javax.inject.Inject
 
 @HiltViewModel
@@ -74,7 +77,7 @@ class DownloadedViewModel @Inject constructor(private val application: Applicati
                     }
                 }
                 mainRepository.updateLocalPlaylistTracks(list, id)
-                Toast.makeText(application, "Added to playlist", Toast.LENGTH_SHORT).show()
+                Toast.makeText(application, application.getString(R.string.added_to_playlist), Toast.LENGTH_SHORT).show()
                 if (count == values.size) {
                     mainRepository.updateLocalPlaylistDownloadState(DownloadState.STATE_DOWNLOADED, id)
                 }
@@ -82,6 +85,33 @@ class DownloadedViewModel @Inject constructor(private val application: Applicati
                     mainRepository.updateLocalPlaylistDownloadState(DownloadState.STATE_NOT_DOWNLOADED, id)
                 }
             }
+        }
+    }
+    fun addToYouTubePlaylist(localPlaylistId: Long, youtubePlaylistId: String, videoId: String) {
+        viewModelScope.launch {
+            mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.Syncing)
+            mainRepository.addYouTubePlaylistItem(youtubePlaylistId, videoId).collect { response ->
+                if (response == "STATUS_SUCCEEDED") {
+                    mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.Synced)
+                    Toast.makeText(getApplication(), application.getString(R.string.added_to_youtube_playlist), Toast.LENGTH_SHORT).show()
+                }
+                else {
+                    mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.NotSynced)
+                    Toast.makeText(getApplication(), application.getString(R.string.error), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun updateInLibrary(videoId: String) {
+        viewModelScope.launch {
+            mainRepository.updateSongInLibrary(LocalDateTime.now(), videoId)
+        }
+    }
+
+    fun insertPairSongLocalPlaylist(pairSongLocalPlaylist: PairSongLocalPlaylist) {
+        viewModelScope.launch {
+            mainRepository.insertPairSongLocalPlaylist(pairSongLocalPlaylist)
         }
     }
 }

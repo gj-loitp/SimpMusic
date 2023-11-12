@@ -1,5 +1,7 @@
 package com.maxrave.kotlinytmusicscraper
 
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.maxrave.kotlinytmusicscraper.encoder.brotli
 import com.maxrave.kotlinytmusicscraper.models.Context
 import com.maxrave.kotlinytmusicscraper.models.WatchEndpoint
@@ -7,12 +9,17 @@ import com.maxrave.kotlinytmusicscraper.models.YouTubeClient
 import com.maxrave.kotlinytmusicscraper.models.YouTubeLocale
 import com.maxrave.kotlinytmusicscraper.models.body.AccountMenuBody
 import com.maxrave.kotlinytmusicscraper.models.body.BrowseBody
+import com.maxrave.kotlinytmusicscraper.models.body.CreatePlaylistBody
+import com.maxrave.kotlinytmusicscraper.models.body.EditPlaylistBody
 import com.maxrave.kotlinytmusicscraper.models.body.FormData
 import com.maxrave.kotlinytmusicscraper.models.body.GetQueueBody
 import com.maxrave.kotlinytmusicscraper.models.body.GetSearchSuggestionsBody
+import com.maxrave.kotlinytmusicscraper.models.body.MusixmatchCredentialsBody
 import com.maxrave.kotlinytmusicscraper.models.body.NextBody
 import com.maxrave.kotlinytmusicscraper.models.body.PlayerBody
 import com.maxrave.kotlinytmusicscraper.models.body.SearchBody
+import com.maxrave.kotlinytmusicscraper.models.musixmatch.SearchMusixmatchResponse
+import com.maxrave.kotlinytmusicscraper.utils.CustomRedirectConfig
 import com.maxrave.kotlinytmusicscraper.utils.parseCookieString
 import com.maxrave.kotlinytmusicscraper.utils.sha1
 import io.ktor.client.*
@@ -20,17 +27,24 @@ import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.compression.*
 import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
+import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.*
-import io.ktor.client.statement.HttpResponse
 import io.ktor.http.*
+import io.ktor.serialization.kotlinx.KotlinxSerializationConverter
 import io.ktor.serialization.kotlinx.json.*
+import io.ktor.serialization.kotlinx.xml.xml
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
+import nl.adaptivity.xmlutil.XmlDeclMode
+import nl.adaptivity.xmlutil.serialization.XML
+import java.lang.reflect.Type
 import java.net.Proxy
 import java.util.*
 
 class Ytmusic {
     private var httpClient = createClient()
+    private var musixmatchClient = createMusixmatchClient()
 
     var locale = YouTubeLocale(
         gl = Locale.getDefault().country,
@@ -44,12 +58,64 @@ class Ytmusic {
         }
     private var cookieMap = emptyMap<String, String>()
 
+    var musixMatchCookie: String? = null
+        set(value) {
+            field = value
+        }
+
+    var musixmatchUserToken: String? = null
+
     var proxy: Proxy? = null
         set(value) {
             field = value
             httpClient.close()
             httpClient = createClient()
         }
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun createMusixmatchClient() = HttpClient(OkHttp) {
+        expectSuccess = true
+        followRedirects = false
+
+        install(HttpSend) {
+            maxSendCount = 100
+        }
+        install(HttpCookies) {
+            storage = AcceptAllCookiesStorage()
+        }
+        install(CustomRedirectConfig) {
+            checkHttpMethod = false
+            allowHttpsDowngrade = true
+            defaultHostUrl = "https://apic-desktop.musixmatch.com"
+        }
+        install(ContentNegotiation) {
+            register(
+                ContentType.Text.Plain, KotlinxSerializationConverter(
+                    Json {
+                        prettyPrint = true
+                        isLenient = true
+                        ignoreUnknownKeys = true
+                        explicitNulls = false
+                        encodeDefaults = true
+                    }
+                )
+            )
+            json(Json {
+                prettyPrint = true
+                isLenient = true
+                ignoreUnknownKeys = true
+                explicitNulls = false
+                encodeDefaults = true
+            })
+        }
+        install(ContentEncoding) {
+            brotli(1.0F)
+            gzip(0.9F)
+            deflate(0.8F)
+        }
+        defaultRequest {
+            url("https://apic-desktop.musixmatch.com/ws/1.1/")
+        }
+    }
 
     @OptIn(ExperimentalSerializationApi::class)
     private fun createClient() = HttpClient(OkHttp) {
@@ -61,6 +127,13 @@ class Ytmusic {
                 explicitNulls = false
                 encodeDefaults = true
             })
+            xml(
+                format = XML {
+                    xmlDeclMode = XmlDeclMode.Charset
+                    autoPolymorphic = true
+                },
+                contentType = ContentType.Text.Xml
+            )
         }
 
         install(ContentEncoding) {
@@ -99,7 +172,8 @@ class Ytmusic {
                     append("cookie", cookie)
                     if ("SAPISID" !in cookieMap) return@let
                     val currentTime = System.currentTimeMillis() / 1000
-                    val sapisidHash = sha1("$currentTime ${cookieMap["SAPISID"]} https://music.youtube.com")
+                    val sapisidHash =
+                        sha1("$currentTime ${cookieMap["SAPISID"]} https://music.youtube.com")
                     append("Authorization", "SAPISIDHASH ${currentTime}_${sapisidHash}")
                 }
             }
@@ -131,6 +205,7 @@ class Ytmusic {
         client: YouTubeClient,
         videoId: String,
         playlistId: String?,
+        cpn: String?,
     ) = httpClient.post("player") {
         ytClient(client, setLogin = true)
         setBody(
@@ -145,45 +220,296 @@ class Ytmusic {
                     } else it
                 },
                 videoId = videoId,
-                playlistId = playlistId
+                playlistId = playlistId,
+                cpn = cpn
             )
         )
     }
 
-    suspend fun pipedStreams(videoId: String)
-        = httpClient.get("https://watchapi.whatever.social/streams/${videoId}") {
-        contentType(ContentType.Application.Json)
-    }
-    suspend fun authorizationSpotify(): HttpResponse {
-        val authHeaderValue = "721d6f670f074b1497e74fc59125a6f3:efddc083fa974d39bc6369a892c07ced"
-        val authHeaderBase64 = Base64.getEncoder().encodeToString(authHeaderValue.toByteArray())
-        val authorization = "Basic $authHeaderBase64"
-        return httpClient.post("https://accounts.spotify.com/api/token") {
-            header(HttpHeaders.Authorization, authorization)
-            header(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded)
-            setBody(
-                listOf("grant_type" to "client_credentials").formUrlEncode()
-            )
+    suspend fun pipedStreams(videoId: String, pipedInstance: String) =
+        httpClient.get("https://${pipedInstance}/streams/${videoId}") {
+            contentType(ContentType.Application.Json)
         }
-    }
-    suspend fun searchSongId(authorization: String, query: String) = httpClient.get("https://api.spotify.com/v1/search") {
-        contentType(ContentType.Application.Json)
-        header(HttpHeaders.Authorization, "Bearer $authorization")
-        parameter("type", "track")
-        parameter("q", query)
-    }
-    suspend fun getLyrics(trackId: String) = httpClient.get("https://spotify-lyric-api.herokuapp.com/") {
-                    contentType(ContentType.Application.Json)
-                    parameter("trackid", trackId)
-                    parameter("format", "id3")
-                }
 
-    suspend fun getSuggestQuery(query: String) = httpClient.get("http://suggestqueries.google.com/complete/search") {
+    suspend fun getSuggestQuery(query: String) =
+        httpClient.get("http://suggestqueries.google.com/complete/search") {
             contentType(ContentType.Application.Json)
             parameter("client", "firefox")
             parameter("ds", "yt")
             parameter("q", query)
         }
+
+    fun fromString(value: String?): List<String>? {
+        val listType: Type = object : TypeToken<ArrayList<String?>?>() {}.type
+        return Gson().fromJson(value, listType)
+    }
+
+    suspend fun getMusixmatchUserToken() = musixmatchClient.get("token.get?app_id=android-player-v1.0") {
+        contentType(ContentType.Application.Json)
+        headers {
+            header(HttpHeaders.UserAgent, "PostmanRuntime/7.33.0")
+            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.AcceptEncoding, "gzip, deflate, br")
+            header(HttpHeaders.Connection, "keep-alive")
+            if (musixMatchCookie != null) {
+                val listCookies = fromString(musixMatchCookie)
+                if (!listCookies.isNullOrEmpty()) {
+                    val appendCookie = listCookies.joinToString(separator = "; ") { eachCookie ->
+                        eachCookie
+                    }
+                    header(HttpHeaders.Cookie, appendCookie)
+                }
+            }
+        }
+    }
+
+    suspend fun postMusixmatchPostCredentials(email: String, password: String, userToken: String) = musixmatchClient.post("https://apic.musixmatch.com/ws/1.1/credential.post") {
+        contentType(ContentType.Application.Json)
+        headers {
+            header(HttpHeaders.UserAgent, "PostmanRuntime/7.33.0")
+            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.AcceptEncoding, "gzip, deflate, br")
+            header(HttpHeaders.Connection, "keep-alive")
+        }
+        parameter("app_id", "android-player-v1.0")
+        parameter("usertoken", userToken)
+        parameter("format", "json")
+        setBody(
+            MusixmatchCredentialsBody(
+                listOf(
+                    MusixmatchCredentialsBody.Credential(
+                        MusixmatchCredentialsBody.Credential.CredentialData(
+                            email = email,
+                            password = password
+                        )
+                    )
+                )
+            )
+        )
+    }
+
+    suspend fun searchMusixmatchTrackId(q: String, userToken: String) = musixmatchClient.get("track.search?app_id=android-player-v1.0&page_size=5&page=1&s_track_rating=desc&quorum_factor=1.0") {
+        contentType(ContentType.Application.Json)
+        headers {
+            header(HttpHeaders.UserAgent, "PostmanRuntime/7.33.0")
+            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.AcceptEncoding, "gzip, deflate, br")
+            header(HttpHeaders.Connection, "keep-alive")
+            if (musixMatchCookie != null) {
+                val listCookies = fromString(musixMatchCookie)
+                if (!listCookies.isNullOrEmpty()) {
+                    val appendCookie = listCookies.joinToString(separator = "; ") { eachCookie ->
+                        eachCookie
+                    }
+                    header(HttpHeaders.Cookie, appendCookie)
+                }
+            }
+        }
+
+        parameter("q", q)
+        parameter("usertoken", userToken)
+    }
+
+    suspend fun getMusixmatchLyrics(trackId: String, userToken: String) = musixmatchClient.get("track.subtitle.get?app_id=android-player-v1.0&subtitle_format=id3") {
+        contentType(ContentType.Application.Json)
+        headers {
+            header(HttpHeaders.UserAgent, "PostmanRuntime/7.33.0")
+            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.AcceptEncoding, "gzip, deflate, br")
+            header(HttpHeaders.Connection, "keep-alive")
+            if (musixMatchCookie != null) {
+                val listCookies = fromString(musixMatchCookie)
+                if (!listCookies.isNullOrEmpty()) {
+                    val appendCookie = listCookies.joinToString(separator = "; ") { eachCookie ->
+                        eachCookie
+                    }
+                    header(HttpHeaders.Cookie, appendCookie)
+                }
+            }
+        }
+
+        parameter("usertoken", userToken)
+        parameter("track_id", trackId)
+    }
+    suspend fun getMusixmatchLyricsByQ(track: SearchMusixmatchResponse.Message.Body.Track.TrackX, userToken: String) = musixmatchClient.get("https://apic.musixmatch.com/ws/1.1/track.subtitles.get") {
+        contentType(ContentType.Application.Json)
+        headers {
+            header(HttpHeaders.UserAgent, "PostmanRuntime/7.33.0")
+            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.AcceptEncoding, "gzip, deflate, br")
+            header(HttpHeaders.Connection, "keep-alive")
+            if (musixMatchCookie != null) {
+                val listCookies = fromString(musixMatchCookie)
+                if (!listCookies.isNullOrEmpty()) {
+                    val appendCookie = listCookies.joinToString(separator = "; ") { eachCookie ->
+                        eachCookie
+                    }
+                    header(HttpHeaders.Cookie, appendCookie)
+                }
+            }
+        }
+
+        parameter("usertoken", userToken)
+        parameter("track_id", track.track_id)
+        parameter("f_subtitle_length_max_deviation", "1")
+        parameter("page_size", "1")
+        parameter("questions_id_list", "track_esync_action%2Ctrack_sync_action%2Ctrack_translation_action%2Clyrics_ai_mood_analysis_v3")
+        parameter("optional_calls", "track.richsync%2Ccrowd.track.actions")
+        parameter("q_artist", track.artist_name)
+        parameter("q_track", track.track_name)
+        parameter("app_id", "android-player-v1.0")
+        parameter("part", "lyrics_crowd%2Cuser%2Clyrics_vote%2Clyrics_poll%2Ctrack_lyrics_translation_status%2Clyrics_verified_by%2Clabels%2Ctrack_structure%2Ctrack_performer_tagging%2C")
+        parameter("language_iso_code", "1")
+        parameter("format", "json")
+        parameter("q_duration", track.track_length)
+    }
+    suspend fun getMusixmatchUnsyncedLyrics(trackId: String, userToken: String) = musixmatchClient.get("track.lyrics.get?app_id=android-player-v1.0&subtitle_format=id3") {
+        contentType(ContentType.Application.Json)
+        headers {
+            header(HttpHeaders.UserAgent, "PostmanRuntime/7.33.0")
+            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.AcceptEncoding, "gzip, deflate, br")
+            header(HttpHeaders.Connection, "keep-alive")
+            if (musixMatchCookie != null) {
+                val listCookies = fromString(musixMatchCookie)
+                if (!listCookies.isNullOrEmpty()) {
+                    val appendCookie = listCookies.joinToString(separator = "; ") { eachCookie ->
+                        eachCookie
+                    }
+                    header(HttpHeaders.Cookie, appendCookie)
+                }
+            }
+        }
+        parameter("usertoken", userToken)
+        parameter("track_id", trackId)
+    }
+
+    suspend fun getMusixmatchTranslateLyrics(trackId: String, userToken: String, language: String) = musixmatchClient.get("https://apic.musixmatch.com/ws/1.1/crowd.track.translations.get") {
+        contentType(ContentType.Application.Json)
+        headers {
+            header(HttpHeaders.UserAgent, "PostmanRuntime/7.33.0")
+            header(HttpHeaders.Accept, "*/*")
+            header(HttpHeaders.AcceptEncoding, "gzip, deflate, br")
+            header(HttpHeaders.Connection, "keep-alive")
+            if (musixMatchCookie != null) {
+                val listCookies = fromString(musixMatchCookie)
+                if (!listCookies.isNullOrEmpty()) {
+                    val appendCookie = listCookies.joinToString(separator = "; ") { eachCookie ->
+                        eachCookie
+                    }
+                    header(HttpHeaders.Cookie, appendCookie)
+                }
+            }
+        }
+        parameters {
+            parameter("translation_fields_set", "minimal")
+            parameter("track_id", trackId)
+            parameter("selected_language", language)
+            parameter("comment_format", "text")
+            parameter("part", "user")
+            parameter("format", "json")
+            parameter("usertoken", userToken)
+            parameter("app_id", "android-player-v1.0")
+            parameter("tags", "playing")
+        }
+    }
+
+    suspend fun getYouTubeCaption(url: String) = httpClient.get(url) {
+        contentType(ContentType.Text.Xml)
+        headers {
+            append(HttpHeaders.Accept, "text/xml; charset=UTF-8")
+        }
+    }
+
+    suspend fun createYouTubePlaylist(title: String, listVideoId: List<String>?) =
+        httpClient.post("playlist/create") {
+            ytClient(YouTubeClient.WEB_REMIX, setLogin = true)
+            setBody(
+                CreatePlaylistBody(
+                    context = YouTubeClient.WEB_REMIX.toContext(locale, visitorData),
+                    title = title,
+                    videoIds = listVideoId
+                )
+            )
+        }
+
+    suspend fun editYouTubePlaylist(playlistId: String, title: String? = null) =
+        httpClient.post("browse/edit_playlist") {
+            ytClient(YouTubeClient.WEB_REMIX, setLogin = true)
+            setBody(
+                EditPlaylistBody(
+                    context = YouTubeClient.WEB_REMIX.toContext(locale, visitorData),
+                    playlistId = playlistId.removePrefix("VL"),
+                    actions = listOf(
+                        EditPlaylistBody.Action(
+                            action = "ACTION_SET_PLAYLIST_NAME",
+                            playlistName = title ?: ""
+                        )
+                    )
+                )
+            )
+        }
+
+    suspend fun addItemYouTubePlaylist(playlistId: String, videoId: String) =
+        httpClient.post("browse/edit_playlist") {
+            ytClient(YouTubeClient.WEB_REMIX, setLogin = true)
+            setBody(
+                EditPlaylistBody(
+                    context = YouTubeClient.WEB_REMIX.toContext(locale, visitorData),
+                    playlistId = playlistId.removePrefix("VL"),
+                    actions = listOf(
+                        EditPlaylistBody.Action(
+                            playlistName = null,
+                            action = "ACTION_ADD_VIDEO",
+                            addedVideoId = videoId
+                        )
+                    )
+                )
+            )
+        }
+    suspend fun removeItemYouTubePlaylist(playlistId: String, videoId: String, setVideoId: String) =
+        httpClient.post("browse/edit_playlist") {
+            ytClient(YouTubeClient.WEB_REMIX, setLogin = true)
+            setBody(
+                EditPlaylistBody(
+                    context = YouTubeClient.WEB_REMIX.toContext(locale, visitorData),
+                    playlistId = playlistId.removePrefix("VL"),
+                    actions = listOf(
+                        EditPlaylistBody.Action(
+                            playlistName = null,
+                            action = "ACTION_REMOVE_VIDEO",
+                            removedVideoId = videoId,
+                            setVideoId = setVideoId
+                        )
+                    )
+                )
+            )
+        }
+
+    /***
+     * SponsorBlock testing
+     * @author maxrave-dev
+     */
+
+    suspend fun getSkipSegments(videoId: String) =
+        httpClient.get("https://sponsor.ajay.app/api/skipSegments/") {
+            contentType(ContentType.Application.Json)
+            parameter("videoID", videoId)
+            parameter("category", "sponsor")
+            parameter("category", "selfpromo")
+            parameter("category", "interaction")
+            parameter("category", "intro")
+            parameter("category", "outro")
+            parameter("category", "preview")
+            parameter("category", "music_offtopic")
+            parameter("category", "poi_highlight")
+            parameter("category", "filler")
+            parameter("service", "YouTube")
+        }
+
+    suspend fun checkForUpdate() = httpClient.get("https://api.github.com/repos/maxrave-dev/SimpMusic/releases/latest") {
+        contentType(ContentType.Application.Json)
+    }
 
     suspend fun browse(
         client: YouTubeClient,
@@ -193,7 +519,7 @@ class Ytmusic {
         countryCode: String? = null,
         setLogin: Boolean = false,
     ) = httpClient.post("browse") {
-        ytClient(client, setLogin)
+        ytClient(client, if (setLogin) true else cookie != "" && cookie != null)
 
         if (countryCode != null) {
             setBody(
@@ -204,8 +530,7 @@ class Ytmusic {
                     formData = FormData(listOf(countryCode))
                 )
             )
-        }
-        else {
+        } else {
             setBody(
                 BrowseBody(
                     context = client.toContext(locale, visitorData),
@@ -222,6 +547,7 @@ class Ytmusic {
             parameter("type", "next")
         }
     }
+
     suspend fun nextCustom(client: YouTubeClient, videoId: String) = httpClient.post("next") {
         ytClient(client, setLogin = false)
         setBody(
@@ -300,4 +626,43 @@ class Ytmusic {
         ytClient(client)
         setBody(AccountMenuBody(client.toContext(locale, visitorData)))
     }
+
+    suspend fun scrapeYouTube(
+        videoId: String
+    ) = httpClient.get("https://www.youtube.com/watch?v=$videoId") {
+        headers {
+            append(HttpHeaders.AcceptLanguage, locale.hl)
+            append(HttpHeaders.ContentLanguage, locale.gl)
+        }
+    }
+
+    suspend fun initPlayback(url: String, cpn: String, customParams: Map<String, String>? = null, playlistId: String?)
+    = httpClient.get(url) {
+        ytClient(YouTubeClient.ANDROID_MUSIC, true)
+        parameter("ver", "2")
+        parameter("c", "ANDROID_MUSIC")
+        parameter("cpn", cpn)
+        customParams?.forEach { (key, value) ->
+            parameter(key, value)
+        }
+        if (playlistId != null) {
+            parameter("list", playlistId)
+            parameter("referrer", "https://music.youtube.com/playlist?list=$playlistId")
+        }
+    }
+
+    suspend fun atr(url: String, cpn: String, customParams: Map<String, String>? = null, playlistId: String?) = httpClient.post(url) {
+        ytClient(YouTubeClient.ANDROID_MUSIC, true)
+        parameter("c", "ANDROID_MUSIC")
+        parameter("cpn", cpn)
+        customParams?.forEach { (key, value) ->
+            parameter(key, value)
+        }
+        if (playlistId != null) {
+            parameter("list", playlistId)
+            parameter("referrer", "https://music.youtube.com/playlist?list=$playlistId")
+        }
+    }
+
+
 }

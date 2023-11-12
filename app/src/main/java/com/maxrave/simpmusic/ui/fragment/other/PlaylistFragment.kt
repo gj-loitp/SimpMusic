@@ -2,8 +2,8 @@ package com.maxrave.simpmusic.ui.fragment.other
 
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.TransitionDrawable
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -36,15 +36,19 @@ import com.maxrave.simpmusic.adapter.playlist.PlaylistItemAdapter
 import com.maxrave.simpmusic.common.Config
 import com.maxrave.simpmusic.common.DownloadState
 import com.maxrave.simpmusic.data.db.entities.LocalPlaylistEntity
+import com.maxrave.simpmusic.data.db.entities.PairSongLocalPlaylist
 import com.maxrave.simpmusic.data.db.entities.SongEntity
 import com.maxrave.simpmusic.data.model.browse.album.Track
 import com.maxrave.simpmusic.data.queue.Queue
 import com.maxrave.simpmusic.databinding.BottomSheetAddToAPlaylistBinding
 import com.maxrave.simpmusic.databinding.BottomSheetNowPlayingBinding
+import com.maxrave.simpmusic.databinding.BottomSheetPlaylistMoreBinding
 import com.maxrave.simpmusic.databinding.BottomSheetSeeArtistOfNowPlayingBinding
 import com.maxrave.simpmusic.databinding.FragmentPlaylistBinding
 import com.maxrave.simpmusic.extension.connectArtists
+import com.maxrave.simpmusic.extension.navigateSafe
 import com.maxrave.simpmusic.extension.removeConflicts
+import com.maxrave.simpmusic.extension.setEnabledAll
 import com.maxrave.simpmusic.extension.toArrayListTrack
 import com.maxrave.simpmusic.extension.toListName
 import com.maxrave.simpmusic.extension.toListVideoId
@@ -59,7 +63,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.time.LocalDateTime
 import kotlin.math.abs
+import kotlin.random.Random
 
 @AndroidEntryPoint
 class PlaylistFragment: Fragment() {
@@ -105,15 +111,57 @@ class PlaylistFragment: Fragment() {
         playlistItemAdapter = PlaylistItemAdapter(arrayListOf())
         binding.rvListSong.apply {
             adapter = playlistItemAdapter
-            layoutManager = LinearLayoutManager(requireContext())
+            layoutManager = LinearLayoutManager(requireContext(), LinearLayoutManager.VERTICAL, false)
+            setHasFixedSize(false)
         }
         var id = requireArguments().getString("id")
         val downloaded = arguments?.getInt("downloaded")
-        if (id == null || id == viewModel.id.value){
+        val radioId = arguments?.getString("radioId")
+        val channelId = arguments?.getString("channelId")
+        Log.w("PlaylistFragment", "radioId: $radioId")
+        val videoId = arguments?.getString("videoId")
+        if (id == null && radioId == null || id == viewModel.id.value && radioId == null || id == null && radioId == viewModel.id.value){
             id = viewModel.id.value
-            fetchDataFromViewModel()
+            if (id?.startsWith("RDEM") == true || id?.startsWith("RDAMVM") == true) {
+                viewModel.updateIsRadio(true)
+            }
+            else {
+                viewModel.updateIsRadio(false)
+            }
+            if (!requireArguments().getBoolean("youtube")) {
+                fetchDataFromViewModel()
+            }
+            else
+            {
+                if (id != null) {
+                    if (downloaded == null || downloaded == 0){
+                        fetchData(id)
+                    }
+                    if (downloaded == 1){
+                        fetchData(id, downloaded = 1)
+                    }
+                }
+            }
         }
-        else {
+        else if (radioId != null && id == null) {
+            viewModel.clearPlaylistBrowse()
+            viewModel.updateIsRadio(true)
+            if (videoId !=  null) {
+                fetchDataWithRadio(radioId, videoId)
+            }
+            else if (channelId != null){
+                fetchDataWithRadio(radioId, null, channelId)
+            }
+        }
+        else if (id != null && id.startsWith("RDEM") || id != null && id.startsWith("RDAMVM")) {
+            viewModel.getPlaylist(id)
+            viewModel.playlistEntity.observe(viewLifecycleOwner) {
+                if (it != null && it.tracks?.first() != null) {
+                    fetchDataWithRadio(id, it.tracks.first())
+                }
+            }
+        }
+        else if (id != null) {
             viewModel.updateId(id)
             if (downloaded == null || downloaded == 0){
                 fetchData(id)
@@ -134,6 +182,90 @@ class PlaylistFragment: Fragment() {
                 viewModel.playlistEntity.value?.let { playlist -> viewModel.updatePlaylistLiked(true, playlist.id) }
             }
         }
+        binding.btMore.setOnClickListener {
+            val bottomSheetDialog = BottomSheetDialog(requireContext())
+            val moreView = BottomSheetPlaylistMoreBinding.inflate(layoutInflater)
+            if (viewModel.isRadio.value == false) {
+                moreView.ivThumbnail.load(viewModel.playlistEntity.value?.thumbnails)
+                moreView.tvSongTitle.text = viewModel.playlistEntity.value?.title
+                moreView.tvSongArtist.text = viewModel.playlistEntity.value?.author
+                moreView.btShare.setOnClickListener {
+                    val shareIntent = Intent(Intent.ACTION_SEND)
+                    shareIntent.type = "text/plain"
+                    val url = "https://youtube.com/playlist?list=${viewModel.playlistEntity.value?.id?.replaceFirst("VL", "")}"
+                    shareIntent.putExtra(Intent.EXTRA_TEXT, url)
+                    val chooserIntent =
+                        Intent.createChooser(shareIntent, getString(R.string.share_url))
+                    startActivity(chooserIntent)
+                }
+            }
+            else {
+                moreView.ivThumbnail.load(viewModel.playlistBrowse.value?.data?.thumbnails?.lastOrNull()?.url)
+                moreView.tvSongTitle.text = viewModel.playlistBrowse.value?.data?.title
+                moreView.tvSongArtist.text = viewModel.playlistBrowse.value?.data?.author?.name
+                moreView.btShare.setOnClickListener {
+                    val shareIntent = Intent(Intent.ACTION_SEND)
+                    shareIntent.type = "text/plain"
+                    val url = "https://youtube.com/playlist?list=${viewModel.playlistBrowse.value?.data?.id?.replaceFirst("VL", "")}"
+                    shareIntent.putExtra(Intent.EXTRA_TEXT, url)
+                    val chooserIntent =
+                        Intent.createChooser(shareIntent, getString(R.string.share_url))
+                    startActivity(chooserIntent)
+                }
+            }
+            if (requireArguments().getBoolean("youtube")) {
+                Log.w("PlaylistFragment", "id check: $id")
+                moreView.btSync.visibility = View.VISIBLE
+                viewModel.checkSyncedPlaylist(id)
+                lifecycleScope.launch {
+                    viewModel.localPlaylistIfYouTubePlaylist.collectLatest { ytPlaylist ->
+                        Log.w("PlaylistFragment", "ytPlaylist: ${ytPlaylist?.youtubePlaylistId}")
+                        Log.w("PlaylistFragment", "id: $id")
+                        if (ytPlaylist != null) {
+                            val tempId = ytPlaylist.youtubePlaylistId
+                            if (tempId == id) {
+                                moreView.tvSync.text = context?.getString(R.string.saved_to_local_playlist)
+                                setEnabledAll(moreView.btSync, false)
+                            }
+                        }
+                        else {
+                            moreView.tvSync.text = context?.getString(R.string.save_to_local_playlist)
+                        }
+                    }
+                }
+                moreView.btSync.setOnClickListener {
+                    if (moreView.tvSync.text == context?.getString(R.string.save_to_local_playlist)) {
+                        val playlist = viewModel.playlistBrowse.value?.data
+                        if (playlist != null) {
+                            val localPlaylistEntity = LocalPlaylistEntity(
+                                title = playlist.title,
+                                thumbnail = playlist.thumbnails.lastOrNull()?.url,
+                                youtubePlaylistId = playlist.id,
+                                syncedWithYouTubePlaylist = 1,
+                                tracks = playlist.tracks.toListVideoId(),
+                                downloadState = DownloadState.STATE_NOT_DOWNLOADED,
+                                syncState = LocalPlaylistEntity.YouTubeSyncState.Synced
+                            )
+                            viewModel.insertLocalPlaylist(localPlaylistEntity, playlist.tracks)
+                            moreView.tvSync.text = context?.getString(R.string.saved_to_local_playlist)
+                        }
+                    } else {
+                        Snackbar.make(
+                            requireView(),
+                            getString(R.string.if_you_want_to_unsync_this_playlist_please_go_to_local_playlist),
+                            Snackbar.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+            else {
+                moreView.btSync.visibility = View.GONE
+            }
+
+            bottomSheetDialog.setContentView(moreView.root)
+            bottomSheetDialog.setCancelable(true)
+            bottomSheetDialog.show()
+        }
 
         binding.btPlayPause.setOnClickListener {
             if (viewModel.playlistBrowse.value is Resource.Success && viewModel.playlistBrowse.value?.data != null){
@@ -141,6 +273,7 @@ class PlaylistFragment: Fragment() {
                 args.putString("type", Config.PLAYLIST_CLICK)
                 args.putString("videoId", viewModel.playlistBrowse.value?.data?.tracks?.get(0)?.videoId)
                 args.putString("from", "Playlist \"${viewModel.playlistBrowse.value?.data?.title}\"")
+                args.putString("playlistId", viewModel.playlistBrowse.value?.data?.id?.replaceFirst("VL", ""))
                 if (viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
                     args.putInt("downloaded", 1)
                 }
@@ -150,13 +283,15 @@ class PlaylistFragment: Fragment() {
                 if (Queue.getQueue().size >= 1) {
                     Queue.removeFirstTrackForPlaylistAndAlbum()
                 }
-                findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                Log.d("PlaylistFragment", "Queue: ${Queue.getQueue().size}")
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
             }
             else if (viewModel.playlistEntity.value != null && viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED){
                 val args = Bundle()
-                args.putString("type", Config.ALBUM_CLICK)
+                args.putString("type", Config.PLAYLIST_CLICK)
                 args.putString("videoId", viewModel.playlistEntity.value?.tracks?.get(0))
-                args.putString("from", "Album \"${viewModel.playlistEntity.value?.title}\"")
+                args.putString("from", "Playlist \"${viewModel.playlistEntity.value?.title}\"")
+                args.putString("playlistId", viewModel.playlistEntity.value?.id?.replaceFirst("VL", ""))
                 if (viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
                     args.putInt("downloaded", 1)
                 }
@@ -166,7 +301,8 @@ class PlaylistFragment: Fragment() {
                 if (Queue.getQueue().size >= 1) {
                     Queue.removeFirstTrackForPlaylistAndAlbum()
                 }
-                findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                Log.d("PlaylistFragment", "Queue: ${Queue.getQueue().size}")
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
             }
             else {
                 Snackbar.make(requireView(),
@@ -178,9 +314,10 @@ class PlaylistFragment: Fragment() {
             override fun onItemClick(position: Int) {
                 if (viewModel.playlistBrowse.value is Resource.Success && viewModel.playlistBrowse.value?.data != null){
                     val args = Bundle()
-                    args.putString("type", Config.ALBUM_CLICK)
+                    args.putString("type", Config.PLAYLIST_CLICK)
                     args.putString("videoId", viewModel.playlistBrowse.value?.data!!.tracks[position].videoId)
-                    args.putString("from", "Album \"${viewModel.playlistBrowse.value?.data!!.title}\"")
+                    args.putString("from", "Playlist \"${viewModel.playlistBrowse.value?.data!!.title}\"")
+                    args.putString("playlistId", viewModel.playlistBrowse.value?.data?.id?.replaceFirst("VL", ""))
                     args.putInt("index", position)
                     if (viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
                         args.putInt("downloaded", 1)
@@ -191,13 +328,16 @@ class PlaylistFragment: Fragment() {
                     if (Queue.getQueue().size >= 1) {
                         Queue.removeTrackWithIndex(position)
                     }
-                    findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                    Log.d("PlaylistFragment", "Queue: ${Queue.getQueue().size}")
+                    findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
                 }
                 else if (viewModel.playlistEntity.value != null && viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED){
                     val args = Bundle()
-                    args.putString("type", Config.ALBUM_CLICK)
+                    args.putString("type", Config.PLAYLIST_CLICK)
                     args.putString("videoId", viewModel.playlistEntity.value?.tracks?.get(position))
-                    args.putString("from", "Album \"${viewModel.playlistEntity.value?.title}\"")
+                    args.putString("from", "Playlist \"${viewModel.playlistEntity.value?.title}\"")
+                    args.putString("playlistId", viewModel.playlistEntity.value?.id?.replaceFirst("VL", ""))
+                    args.putInt("index", position)
                     if (viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
                         args.putInt("downloaded", 1)
                     }
@@ -207,7 +347,8 @@ class PlaylistFragment: Fragment() {
                     if (Queue.getQueue().size >= 1) {
                         Queue.removeTrackWithIndex(position)
                     }
-                    findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                    Log.d("PlaylistFragment", "Queue: ${Queue.getQueue().size}")
+                    findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
                 }
                 else {
                     Snackbar.make(requireView(), getString(R.string.error), Snackbar.LENGTH_SHORT).show()
@@ -221,6 +362,7 @@ class PlaylistFragment: Fragment() {
                 val dialog = BottomSheetDialog(requireContext())
                 val bottomSheetView = BottomSheetNowPlayingBinding.inflate(layoutInflater)
                 with(bottomSheetView) {
+                    btSleepTimer.visibility = View.GONE
                     viewModel.songEntity.observe(viewLifecycleOwner) { songEntity ->
                         if (songEntity.liked) {
                             tvFavorite.text = getString(R.string.liked)
@@ -230,12 +372,22 @@ class PlaylistFragment: Fragment() {
                             cbFavorite.isChecked = false
                         }
                     }
+                    btChangeLyricsProvider.visibility = View.GONE
                     tvSongTitle.text = song.title
                     tvSongTitle.isSelected = true
                     tvSongArtist.text = song.artists.toListName().connectArtists()
                     tvSongArtist.isSelected = true
-                    ivThumbnail.load(song.thumbnails)
-
+                    ivThumbnail.load(song.thumbnails?.lastOrNull()?.url)
+                    btRadio.setOnClickListener {
+                        val args = Bundle()
+                        args.putString("radioId", "RDAMVM${song.videoId}")
+                        args.putString(
+                            "videoId",
+                            song.videoId
+                        )
+                        dialog.dismiss()
+                        findNavController().navigateSafe(R.id.action_global_playlistFragment, args)
+                    }
                     btLike.setOnClickListener {
                         if (cbFavorite.isChecked) {
                             cbFavorite.isChecked = false
@@ -262,7 +414,7 @@ class PlaylistFragment: Fragment() {
                                 override fun onItemClick(position: Int) {
                                     val artist = song.artists[position]
                                     if (artist.id != null) {
-                                        findNavController().navigate(
+                                        findNavController().navigateSafe(
                                             R.id.action_global_artistFragment,
                                             Bundle().apply {
                                                 putString("channelId", artist.id)
@@ -301,9 +453,21 @@ class PlaylistFragment: Fragment() {
                             AddToAPlaylistAdapter.OnItemClickListener {
                             override fun onItemClick(position: Int) {
                                 val playlist = listLocalPlaylist[position]
+                                viewModel.updateInLibrary(song.videoId)
                                 val tempTrack = ArrayList<String>()
                                 if (playlist.tracks != null) {
                                     tempTrack.addAll(playlist.tracks)
+                                }
+                                if (!tempTrack.contains(song.videoId) && playlist.syncedWithYouTubePlaylist == 1 && playlist.youtubePlaylistId != null) {
+                                    viewModel.addToYouTubePlaylist(playlist.id, playlist.youtubePlaylistId, song.videoId)
+                                }
+                                if (!tempTrack.contains(song.videoId)) {
+                                    viewModel.insertPairSongLocalPlaylist(
+                                        PairSongLocalPlaylist(
+                                            playlistId = playlist.id, songId = song.videoId, position = tempTrack.size, inPlaylist = LocalDateTime.now()
+                                        )
+                                    )
+                                    tempTrack.add(song.videoId)
                                 }
                                 tempTrack.add(song.videoId)
                                 tempTrack.removeConflicts()
@@ -334,6 +498,7 @@ class PlaylistFragment: Fragment() {
         binding.topAppBarLayout.addOnOffsetChangedListener { it, verticalOffset ->
             if(abs(it.totalScrollRange) == abs(verticalOffset)) {
                 binding.topAppBar.background = viewModel.gradientDrawable.value
+                binding.collapsingToolbarLayout.isTitleEnabled = true
                 if (viewModel.gradientDrawable.value != null ){
                     if (viewModel.gradientDrawable.value?.colors != null){
                         requireActivity().window.statusBarColor = viewModel.gradientDrawable.value?.colors!!.first()
@@ -342,8 +507,60 @@ class PlaylistFragment: Fragment() {
             }
             else
             {
+                binding.collapsingToolbarLayout.isTitleEnabled = false
                 binding.topAppBar.background = null
                 requireActivity().window.statusBarColor = ContextCompat.getColor(requireContext(), R.color.colorPrimaryDark)
+            }
+        }
+        binding.btShuffle.setOnClickListener {
+            if (viewModel.playlistBrowse.value is Resource.Success && viewModel.playlistBrowse.value?.data != null){
+                val args = Bundle()
+                args.putString("type", Config.PLAYLIST_CLICK)
+                val index = Random.nextInt(0, viewModel.playlistBrowse.value?.data!!.tracks.size - 1)
+                args.putString("videoId", viewModel.playlistBrowse.value?.data?.tracks?.get(index)?.videoId)
+                args.putString("from", "Playlist \"${viewModel.playlistBrowse.value?.data?.title}\"")
+                args.putString("playlistId", viewModel.playlistBrowse.value?.data?.id?.replaceFirst("VL", ""))
+                if (viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
+                    args.putInt("downloaded", 1)
+                }
+                Queue.clear()
+                Queue.setNowPlaying(viewModel.playlistBrowse.value?.data!!.tracks[index])
+                val shuffleList: ArrayList<Track> = arrayListOf()
+                viewModel.playlistBrowse.value?.data?.tracks?.let {
+                    shuffleList.addAll(it)
+                }
+                shuffleList.remove(viewModel.playlistBrowse.value?.data?.tracks?.get(index))
+                shuffleList.shuffle()
+                Queue.addAll(shuffleList)
+                Log.d("PlaylistFragment", "Queue: ${Queue.getQueue().size}")
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
+            }
+            else if (viewModel.playlistEntity.value != null && viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED){
+                val args = Bundle()
+                args.putString("type", Config.PLAYLIST_CLICK)
+                val index = Random.nextInt(0,
+                    viewModel.playlistEntity.value?.tracks?.size?.minus(1) ?: 0
+                )
+                args.putString("videoId", viewModel.playlistEntity.value?.tracks?.get(index))
+                args.putString("from", "Playlist \"${viewModel.playlistEntity.value?.title}\"")
+                args.putString("playlistId", viewModel.playlistEntity.value?.id?.replaceFirst("VL", ""))
+                if (viewModel.playlistEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
+                    args.putInt("downloaded", 1)
+                }
+                Queue.clear()
+                Queue.setNowPlaying(viewModel.listTrack.value?.get(index)!!.toTrack())
+                val shuffleList: ArrayList<Track> = arrayListOf()
+                viewModel.listTrack.value?.toArrayListTrack()
+                    ?.let { it1 -> shuffleList.addAll(it1) }
+                viewModel.listTrack.value?.get(index)?.let { shuffleList.remove(it.toTrack()) }
+                shuffleList.shuffle()
+                Queue.addAll(shuffleList)
+                Log.d("PlaylistFragment", "Queue: ${Queue.getQueue().size}")
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
+            }
+            else {
+                Snackbar.make(requireView(),
+                    getString(R.string.playlist_is_empty), Snackbar.LENGTH_SHORT).show()
             }
         }
         binding.btDownload.setOnClickListener {
@@ -432,18 +649,28 @@ class PlaylistFragment: Fragment() {
                                 binding.btDownload.setImageResource(R.drawable.download_button)
                             }
                         }
+                        if (viewModel.isRadio.value == true) {
+                            binding.btDownload.visibility = View.GONE
+                            binding.animationDownloading.visibility = View.GONE
+                        }
                     }
                 }
             }
         }
     }
+
     private fun fetchDataFromViewModel(){
             val response = viewModel.playlistBrowse.value
             when (response) {
                 is Resource.Success -> {
                     response.data.let {
                         with(binding){
-                            topAppBar.title = it?.title
+                            if (it?.id?.startsWith("RDEM") == true || it?.id?.startsWith("RDAMVM") == true) {
+                                btDownload.visibility = View.GONE
+                            }
+                            collapsingToolbarLayout.title = it?.title
+                            tvTitle.text = it?.title
+                            tvTitle.isSelected = true
                             tvPlaylistAuthor.text = it?.author?.name
                             if (it?.year != "") {
                                 tvYearAndCategory.text = requireContext().getString(R.string.year_and_category, it?.year.toString(), "Playlist")
@@ -452,7 +679,7 @@ class PlaylistFragment: Fragment() {
                                 tvYearAndCategory.text = requireContext().getString(R.string.playlist)
                             }
                             tvTrackCountAndDuration.text = requireContext().getString(R.string.album_length, it?.trackCount.toString(), "")
-                            if (it?.description != null){
+                            if (it?.description != null && it.description != ""){
                                 tvDescription.originalText = it.description
                             } else {
                                 tvDescription.originalText = getString(R.string.no_description)
@@ -463,38 +690,52 @@ class PlaylistFragment: Fragment() {
                             playlistItemAdapter.updateList(list)
                             if (viewModel.gradientDrawable.value == null) {
                                 viewModel.gradientDrawable.observe(viewLifecycleOwner) { gradient ->
-                                    fullRootLayout.background = gradient
-                                    toolbarBackground = gradient?.colors?.get(0)
-                                    topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+                                    //fullRootLayout.background = gradient
+//                                    toolbarBackground = gradient?.colors?.get(0)
+                                    if (gradient != null) {
+                                        val start = topAppBarLayout.background
+                                        val transition =
+                                            TransitionDrawable(arrayOf(start, gradient))
+                                        topAppBarLayout.background = transition
+                                        transition.isCrossFadeEnabled = true
+                                        transition.startTransition(500)
+                                    }
                                 }
                             }
                             else {
-                                fullRootLayout.background = gradientDrawable
-                                topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+//                                fullRootLayout.background = gradientDrawable
+//                                topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+                                topAppBarLayout.background = gradientDrawable
                             }
                             binding.rootLayout.visibility = View.VISIBLE
                             binding.loadingLayout.visibility = View.GONE
-                            val playlistEntity = viewModel.playlistEntity.value
-                            if (playlistEntity != null){
-                                viewModel.checkAllSongDownloaded(it.tracks as ArrayList<Track>)
-                                viewModel.playlistEntity.observe(viewLifecycleOwner){ playlistEntity2 ->
-                                    when (playlistEntity2.downloadState) {
-                                        DownloadState.STATE_DOWNLOADED -> {
-                                            btDownload.visibility = View.VISIBLE
-                                            animationDownloading.visibility = View.GONE
-                                            btDownload.setImageResource(R.drawable.baseline_downloaded)
-                                        }
-                                        DownloadState.STATE_DOWNLOADING -> {
-                                            btDownload.visibility = View.GONE
-                                            animationDownloading.visibility = View.VISIBLE
-                                        }
-                                        DownloadState.STATE_NOT_DOWNLOADED -> {
-                                            btDownload.visibility = View.VISIBLE
-                                            animationDownloading.visibility = View.GONE
-                                            btDownload.setImageResource(R.drawable.download_button)
+                            if (viewModel.isRadio.value == false) {
+                                val playlistEntity = viewModel.playlistEntity.value
+                                if (playlistEntity != null){
+                                    viewModel.checkAllSongDownloaded(it.tracks as ArrayList<Track>)
+                                    viewModel.playlistEntity.observe(viewLifecycleOwner){ playlistEntity2 ->
+                                        when (playlistEntity2.downloadState) {
+                                            DownloadState.STATE_DOWNLOADED -> {
+                                                btDownload.visibility = View.VISIBLE
+                                                animationDownloading.visibility = View.GONE
+                                                btDownload.setImageResource(R.drawable.baseline_downloaded)
+                                            }
+                                            DownloadState.STATE_DOWNLOADING -> {
+                                                btDownload.visibility = View.GONE
+                                                animationDownloading.visibility = View.VISIBLE
+                                            }
+                                            DownloadState.STATE_NOT_DOWNLOADED -> {
+                                                btDownload.visibility = View.VISIBLE
+                                                animationDownloading.visibility = View.GONE
+                                                btDownload.setImageResource(R.drawable.download_button)
+                                            }
                                         }
                                     }
                                 }
+                            }
+                            else {
+                                btDownload.visibility = View.GONE
+                                cbLove.visibility = View.GONE
                             }
                         }
                     }
@@ -509,6 +750,74 @@ class PlaylistFragment: Fragment() {
 
     }
 
+    private fun fetchDataWithRadio(radioId: String, videoId: String? = null, channelId: String? = null) {
+        viewModel.clearPlaylistBrowse()
+        viewModel.updateId(radioId)
+        viewModel.getRadio(radioId, videoId, channelId)
+        viewModel.playlistBrowse.observe(viewLifecycleOwner) {response ->
+            when (response) {
+                is Resource.Success -> {
+                    response.data.let {
+                        with(binding){
+                            if (it != null) {
+                                viewModel.insertRadioPlaylist(it.toPlaylistEntity())
+                            }
+                            collapsingToolbarLayout.title = it?.title
+                            tvTitle.text = it?.title
+                            tvTitle.isSelected = true
+                            tvPlaylistAuthor.text = it?.author?.name
+                            if (it?.year != "") {
+                                tvYearAndCategory.text = requireContext().getString(R.string.year_and_category, it?.year.toString(), "Playlist")
+                            }
+                            else {
+                                tvYearAndCategory.text = requireContext().getString(R.string.playlist)
+                            }
+                            tvTrackCountAndDuration.text = requireContext().getString(R.string.album_length, it?.trackCount.toString(), "")
+                            if (it?.description != null && it.description != ""){
+                                tvDescription.originalText = it.description
+                            } else {
+                                tvDescription.originalText = getString(R.string.no_description)
+                            }
+                            loadImage(it?.thumbnails?.last()?.url)
+                            val list: ArrayList<Any> = arrayListOf()
+                            list.addAll(it?.tracks as ArrayList<Track>)
+                            playlistItemAdapter.updateList(list)
+                            if (viewModel.gradientDrawable.value == null) {
+                                viewModel.gradientDrawable.observe(viewLifecycleOwner)
+                                { gradient ->
+//                                    fullRootLayout.background = gradient
+//                                    toolbarBackground = gradient?.colors?.get(0)
+                                    if (gradient != null) {
+                                        val start = topAppBarLayout.background
+                                        val transition =
+                                            TransitionDrawable(arrayOf(start, gradient))
+                                        topAppBarLayout.background = transition
+                                        transition.isCrossFadeEnabled = true
+                                        transition.startTransition(500)
+                                    }
+                                }
+                            }
+                            else {
+//                                fullRootLayout.background = gradientDrawable
+//                                topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+                                topAppBarLayout.background = gradientDrawable
+                            }
+                            binding.rootLayout.visibility = View.VISIBLE
+                            binding.loadingLayout.visibility = View.GONE
+                            btDownload.visibility = View.GONE
+                            cbLove.visibility = View.GONE
+                        }
+                    }
+                }
+                is Resource.Error -> {
+                    Snackbar.make(binding.root, response.message.toString(), Snackbar.LENGTH_LONG).show()
+                    findNavController().popBackStack()
+                }
+                else -> {}
+            }
+        }
+    }
+
     private fun fetchData(id: String, downloaded: Int = 0){
         if (downloaded == 0) {
             viewModel.clearPlaylistBrowse()
@@ -521,7 +830,9 @@ class PlaylistFragment: Fragment() {
                                 if (it != null) {
                                     viewModel.insertPlaylist(it.toPlaylistEntity())
                                 }
-                                topAppBar.title = it?.title
+                                collapsingToolbarLayout.title = it?.title
+                                tvTitle.text = it?.title
+                                tvTitle.isSelected = true
                                 tvPlaylistAuthor.text = it?.author?.name
                                 if (it?.year != "") {
                                     tvYearAndCategory.text = requireContext().getString(R.string.year_and_category, it?.year.toString(), "Playlist")
@@ -530,7 +841,7 @@ class PlaylistFragment: Fragment() {
                                     tvYearAndCategory.text = requireContext().getString(R.string.playlist)
                                 }
                                 tvTrackCountAndDuration.text = requireContext().getString(R.string.album_length, it?.trackCount.toString(), "")
-                                if (it?.description != null){
+                                if (it?.description != null && it.description != ""){
                                     tvDescription.originalText = it.description
                                 } else {
                                     tvDescription.originalText = getString(R.string.no_description)
@@ -542,14 +853,23 @@ class PlaylistFragment: Fragment() {
                                 if (viewModel.gradientDrawable.value == null) {
                                     viewModel.gradientDrawable.observe(viewLifecycleOwner)
                                         { gradient ->
-                                            fullRootLayout.background = gradient
-                                            toolbarBackground = gradient?.colors?.get(0)
-                                            topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+//                                            fullRootLayout.background = gradient
+//                                            toolbarBackground = gradient?.colors?.get(0)
+//                                            topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+                                            if (gradient != null) {
+                                                val start = topAppBarLayout.background
+                                                val transition =
+                                                    TransitionDrawable(arrayOf(start, gradient))
+                                                topAppBarLayout.background = transition
+                                                transition.isCrossFadeEnabled = true
+                                                transition.startTransition(500)
+                                            }
                                         }
                                 }
                                 else {
-                                    fullRootLayout.background = gradientDrawable
-                                    topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+//                                    fullRootLayout.background = gradientDrawable
+//                                    topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+                                    topAppBarLayout.background = gradientDrawable
                                 }
                                 binding.rootLayout.visibility = View.VISIBLE
                                 binding.loadingLayout.visibility = View.GONE
@@ -608,7 +928,9 @@ class PlaylistFragment: Fragment() {
                                 btDownload.setImageResource(R.drawable.download_button)
                             }
                         }
-                        topAppBar.title = playlistEntity.title
+                        collapsingToolbarLayout.title = playlistEntity.title
+                        tvTitle.text = playlistEntity.title
+                        tvTitle.isSelected = true
                         tvPlaylistAuthor.text = playlistEntity.author
                         tvYearAndCategory.text = requireContext().getString(R.string.year_and_category, playlistEntity.year.toString(), "Playlist")
                         tvTrackCountAndDuration.text = requireContext().getString(R.string.album_length, playlistEntity.trackCount.toString(),
@@ -617,19 +939,27 @@ class PlaylistFragment: Fragment() {
                         if (playlistEntity.description != ""){
                             tvDescription.originalText = playlistEntity.description
                         } else {
-                            tvDescription.originalText = "No description"
+                            tvDescription.originalText = getString(R.string.no_description)
                         }
                         loadImage(playlistEntity.thumbnails)
                         if (viewModel.gradientDrawable.value == null) {
                             viewModel.gradientDrawable.observe(viewLifecycleOwner) { gradient ->
-                                fullRootLayout.background = gradient
-                                toolbarBackground = gradient?.colors?.get(0)
-                                topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+//                                fullRootLayout.background = gradient
+//                                toolbarBackground = gradient?.colors?.get(0)
+//                                topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+                                if (gradient != null) {
+                                    val start = topAppBarLayout.background
+                                    val transition = TransitionDrawable(arrayOf(start, gradient))
+                                    topAppBarLayout.background = transition
+                                    transition.isCrossFadeEnabled = true
+                                    transition.startTransition(500)
+                                }
                             }
                         }
                         else {
-                            fullRootLayout.background = gradientDrawable
-                            topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+//                            fullRootLayout.background = gradientDrawable
+//                            topAppBarLayout.background = ColorDrawable(toolbarBackground!!)
+                            topAppBarLayout.background = gradientDrawable
                         }
                         viewModel.getListTrack(playlistEntity.tracks)
                         viewModel.listTrack.observe(viewLifecycleOwner) { listTrack ->

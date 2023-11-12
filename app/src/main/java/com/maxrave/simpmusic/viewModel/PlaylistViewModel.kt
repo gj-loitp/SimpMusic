@@ -1,7 +1,6 @@
 package com.maxrave.simpmusic.viewModel
 
 import android.app.Application
-import android.content.Context
 import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.widget.Toast
@@ -11,39 +10,42 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
+import com.maxrave.simpmusic.R
 import com.maxrave.simpmusic.common.DownloadState
 import com.maxrave.simpmusic.common.SELECTED_LANGUAGE
 import com.maxrave.simpmusic.data.dataStore.DataStoreManager
 import com.maxrave.simpmusic.data.db.entities.LocalPlaylistEntity
+import com.maxrave.simpmusic.data.db.entities.PairSongLocalPlaylist
 import com.maxrave.simpmusic.data.db.entities.PlaylistEntity
 import com.maxrave.simpmusic.data.db.entities.SongEntity
 import com.maxrave.simpmusic.data.model.browse.album.Track
 import com.maxrave.simpmusic.data.model.browse.playlist.PlaylistBrowse
 import com.maxrave.simpmusic.data.repository.MainRepository
+import com.maxrave.simpmusic.extension.toSongEntity
 import com.maxrave.simpmusic.service.test.download.DownloadUtils
 import com.maxrave.simpmusic.utils.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.time.LocalDateTime
 import javax.inject.Inject
 
 @HiltViewModel
 class PlaylistViewModel @Inject constructor(
     private val mainRepository: MainRepository,
-    @ApplicationContext private val context: Context,
-    application: Application,
+    private val application: Application,
     private var dataStoreManager: DataStoreManager
 ): AndroidViewModel(application) {
     @Inject
     lateinit var downloadUtils: DownloadUtils
 
-    var gradientDrawable: MutableLiveData<GradientDrawable> = MutableLiveData()
+    var gradientDrawable: MutableLiveData<GradientDrawable?> = MutableLiveData()
     var loading = MutableLiveData<Boolean>()
 
     private val _playlistBrowse: MutableLiveData<Resource<PlaylistBrowse>?> = MutableLiveData()
@@ -51,6 +53,9 @@ class PlaylistViewModel @Inject constructor(
 
     private val _id: MutableLiveData<String> = MutableLiveData()
     var id: LiveData<String> = _id
+
+    private val _isRadio: MutableLiveData<Boolean> = MutableLiveData()
+    var isRadio: LiveData<Boolean> = _isRadio
 
     private var _playlistEntity: MutableLiveData<PlaylistEntity> = MutableLiveData()
     var playlistEntity: LiveData<PlaylistEntity> = _playlistEntity
@@ -74,6 +79,9 @@ class PlaylistViewModel @Inject constructor(
     fun updateId(id: String){
         _id.value = id
     }
+    fun updateIsRadio(isRadio: Boolean) {
+        _isRadio.value = isRadio
+    }
 
     fun browsePlaylist(id: String) {
         loading.value = true
@@ -86,6 +94,34 @@ class PlaylistViewModel @Inject constructor(
             }
             withContext(Dispatchers.Main){
                 loading.value = false
+            }
+        }
+    }
+
+    fun getRadio(radioId: String, videoId: String? = null, channelId: String? = null) {
+        loading.value = true
+        viewModelScope.launch {
+            if (videoId != null) {
+                mainRepository.getSongById(videoId).collectLatest { song ->
+                    if (song != null) {
+                        mainRepository.getRadio(radioId, song).collect {
+                            _playlistBrowse.value = it
+                        }
+                        withContext(Dispatchers.Main) {
+                            loading.value = false
+                        }
+                    }
+                }
+            }
+            else if (channelId != null) {
+                mainRepository.getArtistById(channelId).collectLatest { artist ->
+                    mainRepository.getRadio(radioId = radioId, artist = artist).collect {
+                        _playlistBrowse.value = it
+                    }
+                    withContext(Dispatchers.Main) {
+                        loading.value = false
+                    }
+                }
             }
         }
     }
@@ -277,6 +313,7 @@ class PlaylistViewModel @Inject constructor(
 
     fun clearPlaylistBrowse() {
         _playlistBrowse.value = null
+        gradientDrawable.value = null
     }
 
     fun getLocation() {
@@ -316,7 +353,7 @@ class PlaylistViewModel @Inject constructor(
                     }
                 }
                 mainRepository.updateLocalPlaylistTracks(list, id)
-                Toast.makeText(getApplication(), "Added to playlist", Toast.LENGTH_SHORT).show()
+                Toast.makeText(getApplication(), application.getString(R.string.added_to_playlist), Toast.LENGTH_SHORT).show()
                 if (count == values.size) {
                     mainRepository.updateLocalPlaylistDownloadState(DownloadState.STATE_DOWNLOADED, id)
                 }
@@ -364,6 +401,73 @@ class PlaylistViewModel @Inject constructor(
                         DownloadState.STATE_NOT_DOWNLOADED
                     }
             }
+        }
+    }
+
+    fun insertLocalPlaylist(localPlaylistEntity: LocalPlaylistEntity, listTrack: List<Track>) {
+        viewModelScope.launch {
+            mainRepository.insertLocalPlaylist(localPlaylistEntity)
+            mainRepository.getLocalPlaylistByYoutubePlaylistId(localPlaylistEntity.youtubePlaylistId!!).collect { playlist ->
+                if (playlist != null && playlist.youtubePlaylistId == localPlaylistEntity.youtubePlaylistId) {
+                    for (track in listTrack) {
+                        mainRepository.insertSong(track.toSongEntity())
+                    }
+                }
+            }
+            Toast.makeText(application, application.getString(R.string.added_local_playlist), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private var _localPlaylistIfYouTubePlaylist: MutableStateFlow<LocalPlaylistEntity?> = MutableStateFlow(null)
+    var localPlaylistIfYouTubePlaylist: MutableStateFlow<LocalPlaylistEntity?> = _localPlaylistIfYouTubePlaylist
+
+    fun checkSyncedPlaylist(value: String?) {
+        viewModelScope.launch {
+            if (value != null) {
+                mainRepository.getLocalPlaylistByYoutubePlaylistId(value).collect {
+                    _localPlaylistIfYouTubePlaylist.value = it
+                }
+            }
+        }
+    }
+    fun addToYouTubePlaylist(localPlaylistId: Long, youtubePlaylistId: String, videoId: String) {
+        viewModelScope.launch {
+            mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.Syncing)
+            mainRepository.addYouTubePlaylistItem(youtubePlaylistId, videoId).collect { response ->
+                if (response == "STATUS_SUCCEEDED") {
+                    mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.Synced)
+                    Toast.makeText(application, application.getString(R.string.added_to_youtube_playlist), Toast.LENGTH_SHORT).show()
+                }
+                else {
+                    mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.NotSynced)
+                    Toast.makeText(application, application.getString(R.string.error), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun insertRadioPlaylist(playlistEntity: PlaylistEntity) {
+        viewModelScope.launch {
+            mainRepository.insertRadioPlaylist(playlistEntity)
+            mainRepository.getPlaylist(playlistEntity.id).collect{ values ->
+                _playlistEntity.value = values
+                if (values != null) {
+                    _liked.value = values.liked
+                }
+            }
+        }
+    }
+
+    fun updateInLibrary(videoId: String) {
+        viewModelScope.launch {
+            mainRepository.updateSongInLibrary(LocalDateTime.now(), videoId)
+        }
+
+    }
+
+    fun insertPairSongLocalPlaylist(pairSongLocalPlaylist: PairSongLocalPlaylist) {
+        viewModelScope.launch {
+            mainRepository.insertPairSongLocalPlaylist(pairSongLocalPlaylist)
         }
     }
 }

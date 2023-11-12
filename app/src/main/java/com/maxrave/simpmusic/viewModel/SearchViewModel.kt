@@ -9,10 +9,13 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
+import com.maxrave.kotlinytmusicscraper.models.SearchSuggestions
+import com.maxrave.simpmusic.R
 import com.maxrave.simpmusic.common.DownloadState
 import com.maxrave.simpmusic.common.SELECTED_LANGUAGE
 import com.maxrave.simpmusic.data.dataStore.DataStoreManager
 import com.maxrave.simpmusic.data.db.entities.LocalPlaylistEntity
+import com.maxrave.simpmusic.data.db.entities.PairSongLocalPlaylist
 import com.maxrave.simpmusic.data.db.entities.SearchHistory
 import com.maxrave.simpmusic.data.db.entities.SongEntity
 import com.maxrave.simpmusic.data.model.browse.album.Track
@@ -36,10 +39,11 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.time.LocalDateTime
 import javax.inject.Inject
 
 @HiltViewModel
-class SearchViewModel @Inject constructor(private val mainRepository: MainRepository, application: Application, private var dataStoreManager: DataStoreManager) : AndroidViewModel(application) {
+class SearchViewModel @Inject constructor(private val mainRepository: MainRepository, private val application: Application, private var dataStoreManager: DataStoreManager) : AndroidViewModel(application) {
     @Inject
     lateinit var downloadUtils: DownloadUtils
 
@@ -49,25 +53,37 @@ class SearchViewModel @Inject constructor(private val mainRepository: MainReposi
     var searchHistory: MutableLiveData<ArrayList<String>> = MutableLiveData()
     var searchResult: MutableLiveData<ArrayList<Any>> = MutableLiveData()
 
-    private val _songSearchResult: MutableLiveData<Resource<ArrayList<SongsResult>>> = MutableLiveData()
+    private var _songSearchResult: MutableLiveData<Resource<ArrayList<SongsResult>>> = MutableLiveData()
     val songsSearchResult: LiveData<Resource<ArrayList<SongsResult>>> = _songSearchResult
 
-    private val _artistSearchResult: MutableLiveData<Resource<ArrayList<ArtistsResult>>> = MutableLiveData()
+    private var _artistSearchResult: MutableLiveData<Resource<ArrayList<ArtistsResult>>> = MutableLiveData()
     val artistsSearchResult: LiveData<Resource<ArrayList<ArtistsResult>>> = _artistSearchResult
 
-    private val _albumSearchResult: MutableLiveData<Resource<ArrayList<AlbumsResult>>> = MutableLiveData()
+    private var _albumSearchResult: MutableLiveData<Resource<ArrayList<AlbumsResult>>> =
+        MutableLiveData()
     val albumsSearchResult: LiveData<Resource<ArrayList<AlbumsResult>>> = _albumSearchResult
 
-    private val _playlistSearchResult: MutableLiveData<Resource<ArrayList<PlaylistsResult>>> = MutableLiveData()
+    private var _playlistSearchResult: MutableLiveData<Resource<ArrayList<PlaylistsResult>>> =
+        MutableLiveData()
     val playlistSearchResult: LiveData<Resource<ArrayList<PlaylistsResult>>> = _playlistSearchResult
 
-    private val _videoSearchResult: MutableLiveData<Resource<ArrayList<VideosResult>>> = MutableLiveData()
+    private var _videoSearchResult: MutableLiveData<Resource<ArrayList<VideosResult>>> =
+        MutableLiveData()
     val videoSearchResult: LiveData<Resource<ArrayList<VideosResult>>> = _videoSearchResult
+
+    private var _featuredPlaylistSearchResult: MutableLiveData<Resource<ArrayList<PlaylistsResult>>> =
+        MutableLiveData()
+    val featuredPlaylistSearchResult: LiveData<Resource<ArrayList<PlaylistsResult>>> =
+        _featuredPlaylistSearchResult
+
+    private var _podcastSearchResult: MutableLiveData<Resource<ArrayList<PlaylistsResult>>> =
+        MutableLiveData()
+    val podcastSearchResult: LiveData<Resource<ArrayList<PlaylistsResult>>> = _podcastSearchResult
 
     var loading = MutableLiveData<Boolean>()
 
-    private val _suggestQuery: MutableLiveData<Resource<ArrayList<String>>> = MutableLiveData()
-    val suggestQuery : LiveData<Resource<ArrayList<String>>> = _suggestQuery
+    private var _suggestQuery: MutableLiveData<Resource<SearchSuggestions>> = MutableLiveData()
+    val suggestQuery: LiveData<Resource<SearchSuggestions>> = _suggestQuery
 
     var errorMessage = MutableLiveData<String>()
 
@@ -156,9 +172,21 @@ class SearchViewModel @Inject constructor(private val mainRepository: MainReposi
                 }
             }
             val job5 = launch {
-                mainRepository.getSearchDataVideo(query).collect {values ->
+                mainRepository.getSearchDataVideo(query).collect { values ->
                     _videoSearchResult.value = values
                     Log.d("SearchViewModel", "searchVideos: ${_videoSearchResult.value}")
+                }
+            }
+            val job6 = launch {
+                mainRepository.getSearchDataFeaturedPlaylist(query).collect { values ->
+                    Log.d("SearchViewModel", "featured: $values")
+                    _featuredPlaylistSearchResult.value = values
+                }
+            }
+            val job7 = launch {
+                mainRepository.getSearchDataPodcast(query).collect { values ->
+                    Log.d("SearchViewModel", "podcast: ${values.data.toString()}")
+                    _podcastSearchResult.value = values
                 }
             }
             job1.join()
@@ -166,6 +194,8 @@ class SearchViewModel @Inject constructor(private val mainRepository: MainReposi
             job3.join()
             job4.join()
             job5.join()
+            job6.join()
+            job7.join()
             withContext(Dispatchers.Main) {
                 loading.value = false
             }
@@ -181,31 +211,63 @@ class SearchViewModel @Inject constructor(private val mainRepository: MainReposi
     }
 
 
-    override fun onCleared() {
-        super.onCleared()
+    fun searchAlbums(query: String) {
+        if (loading.value == false) {
+            loading.value = true
+            viewModelScope.launch {
+                mainRepository.getSearchDataAlbum(query).collect { values ->
+                    _albumSearchResult.value = values
+                    Log.d("SearchViewModel", "searchAlbums: ${_albumSearchResult.value}")
+                    withContext(Dispatchers.Main) {
+                        loading.value = false
+                    }
+                }
+            }
+        }
     }
 
-    fun searchAlbums(query: String) {
-        if (loading.value == false){
+    fun searchFeaturedPlaylist(query: String) {
+        if (loading.value == false) {
             loading.value = true
-            viewModelScope.launch { mainRepository.getSearchDataAlbum(query).collect {values ->
-                _albumSearchResult.value = values
-                Log.d("SearchViewModel", "searchAlbums: ${_albumSearchResult.value}")
-                withContext(Dispatchers.Main) {
-                    loading.value = false
+            viewModelScope.launch {
+                mainRepository.getSearchDataFeaturedPlaylist(query).collect { values ->
+                    _featuredPlaylistSearchResult.value = values
+                    Log.d(
+                        "SearchViewModel",
+                        "searchFeaturedPlaylist: ${_featuredPlaylistSearchResult.value}"
+                    )
+                    withContext(Dispatchers.Main) {
+                        loading.value = false
+                    }
                 }
-            } }
+            }
+        }
+    }
+
+    fun searchPodcast(query: String) {
+        if (loading.value == false) {
+            loading.value = true
+            viewModelScope.launch {
+                mainRepository.getSearchDataPodcast(query).collect { values ->
+                    _podcastSearchResult.value = values
+                    Log.d("SearchViewModel", "searchPodcast: ${_podcastSearchResult.value}")
+                    withContext(Dispatchers.Main) {
+                        loading.value = false
+                    }
+                }
+            }
         }
     }
 
     fun searchArtists(query: String) {
-        if (loading.value == false){
+        if (loading.value == false) {
             loading.value = true
-            viewModelScope.launch { mainRepository.getSearchDataArtist(query).collect {values ->
-                _artistSearchResult.value = values
-                Log.d("SearchViewModel", "searchArtists: ${_artistSearchResult.value}")
-                withContext(Dispatchers.Main) {
-                    loading.value = false
+            viewModelScope.launch {
+                mainRepository.getSearchDataArtist(query).collect { values ->
+                    _artistSearchResult.value = values
+                    Log.d("SearchViewModel", "searchArtists: ${_artistSearchResult.value}")
+                    withContext(Dispatchers.Main) {
+                        loading.value = false
                 }
             } }
         }
@@ -327,7 +389,7 @@ class SearchViewModel @Inject constructor(private val mainRepository: MainReposi
                     }
                 }
                 mainRepository.updateLocalPlaylistTracks(list, id)
-                Toast.makeText(getApplication(), "Added to playlist", Toast.LENGTH_SHORT).show()
+                Toast.makeText(getApplication(), application.getString (R.string.added_to_playlist), Toast.LENGTH_SHORT).show()
                 if (count == values.size) {
                     mainRepository.updateLocalPlaylistDownloadState(DownloadState.STATE_DOWNLOADED, id)
                 }
@@ -335,6 +397,34 @@ class SearchViewModel @Inject constructor(private val mainRepository: MainReposi
                     mainRepository.updateLocalPlaylistDownloadState(DownloadState.STATE_NOT_DOWNLOADED, id)
                 }
             }
+        }
+    }
+
+    fun addToYouTubePlaylist(localPlaylistId: Long, youtubePlaylistId: String, videoId: String) {
+        viewModelScope.launch {
+            mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.Syncing)
+            mainRepository.addYouTubePlaylistItem(youtubePlaylistId, videoId).collect { response ->
+                if (response == "STATUS_SUCCEEDED") {
+                    mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.Synced)
+                    Toast.makeText(getApplication(), application.getString(R.string.added_to_youtube_playlist), Toast.LENGTH_SHORT).show()
+                }
+                else {
+                    mainRepository.updateLocalPlaylistYouTubePlaylistSyncState(localPlaylistId, LocalPlaylistEntity.YouTubeSyncState.NotSynced)
+                    Toast.makeText(getApplication(), application.getString(R.string.error), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun updateInLibrary(videoId: String) {
+        viewModelScope.launch {
+            mainRepository.updateSongInLibrary(LocalDateTime.now(), videoId)
+        }
+    }
+
+    fun insertPairSongLocalPlaylist(pairSongLocalPlaylist: PairSongLocalPlaylist) {
+        viewModelScope.launch {
+            mainRepository.insertPairSongLocalPlaylist(pairSongLocalPlaylist)
         }
     }
 }

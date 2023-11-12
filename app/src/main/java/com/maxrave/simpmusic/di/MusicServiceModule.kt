@@ -1,30 +1,22 @@
 package com.maxrave.simpmusic.di
 
 import android.content.Context
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.DatabaseProvider
 import androidx.media3.database.StandaloneDatabaseProvider
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.session.MediaSession
 import com.maxrave.simpmusic.data.dataStore.DataStoreManager
 import com.maxrave.simpmusic.data.repository.MainRepository
-import com.maxrave.simpmusic.service.SimpleMediaNotificationManager
-import com.maxrave.simpmusic.service.SimpleMediaServiceHandler
-import com.maxrave.simpmusic.service.test.source.MusicSource
+import com.maxrave.simpmusic.service.SimpleMediaSessionCallback
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import javax.inject.Qualifier
 import javax.inject.Singleton
 
@@ -48,119 +40,34 @@ object MusicServiceModule {
     @Singleton
     @Provides
     @PlayerCache
-    fun providePlayerCache(@ApplicationContext context: Context, databaseProvider: DatabaseProvider): SimpleCache =
+    fun providePlayerCache(
+        @ApplicationContext context: Context,
+        databaseProvider: DatabaseProvider,
+        dataStoreManager: DataStoreManager
+    ): SimpleCache =
         SimpleCache(
             context.filesDir.resolve("exoplayer"),
-            NoOpCacheEvictor(),
+            when (val cacheSize = runBlocking { dataStoreManager.maxSongCacheSize.first() }) {
+                -1 -> NoOpCacheEvictor()
+                else -> LeastRecentlyUsedCacheEvictor(cacheSize * 1024 * 1024L)
+            },
             databaseProvider
         )
 
     @Singleton
     @Provides
     @DownloadCache
-    fun provideDownloadCache(@ApplicationContext context: Context, databaseProvider: DatabaseProvider): SimpleCache =
+    fun provideDownloadCache(
+        @ApplicationContext context: Context,
+        databaseProvider: DatabaseProvider
+    ): SimpleCache =
         SimpleCache(context.filesDir.resolve("download"), NoOpCacheEvictor(), databaseProvider)
 
-    @Provides
-    @Singleton
-    fun provideAudioAttributes(): AudioAttributes =
-        AudioAttributes.Builder()
-            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-            .setUsage(C.USAGE_MEDIA)
-            .build()
-
-//    @Provides
-//    @Singleton
-//    @UnstableApi
-//    fun provideDataSource(@ApplicationContext context: Context): DefaultMediaSourceFactory = DefaultMediaSourceFactory(context).setDataSourceFactory(
-//        DefaultHttpDataSource.Factory()
-//            .setAllowCrossProtocolRedirects(true)
-//            .setUserAgent("Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36")
-//            .setConnectTimeoutMs(5000)
-//    )
 
     @Provides
     @Singleton
-    @UnstableApi
-    fun provideCacheDataSource(@DownloadCache downloadCache: SimpleCache, @PlayerCache playerCache: SimpleCache): CacheDataSource.Factory {
-        return CacheDataSource.Factory()
-            .setCache(downloadCache)
-            .setUpstreamDataSourceFactory(
-                CacheDataSource.Factory()
-                    .setCache(playerCache)
-                    .setUpstreamDataSourceFactory(DefaultHttpDataSource.Factory()
-                        .setAllowCrossProtocolRedirects(true)
-                        .setUserAgent("Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36")
-                        .setConnectTimeoutMs(5000))
-            )
-            .setCacheWriteDataSinkFactory(null)
-            .setFlags(FLAG_IGNORE_CACHE_ON_ERROR)
-    }
-
-    @Provides
-    @Singleton
-    @UnstableApi
-    fun provideMediaSourceFactory(
+    fun provideMediaSessionCallback(
         @ApplicationContext context: Context,
-        cacheDataSourceFactory: CacheDataSource.Factory
-    ): DefaultMediaSourceFactory =
-        DefaultMediaSourceFactory(context).setDataSourceFactory(cacheDataSourceFactory)
-
-    @Provides
-    @Singleton
-    @UnstableApi
-    fun providePlayer(
-        @ApplicationContext context: Context,
-        audioAttributes: AudioAttributes,
-        mediaSourceFactory: DefaultMediaSourceFactory
-    ): ExoPlayer =
-        ExoPlayer.Builder(context)
-            .setAudioAttributes(audioAttributes, true)
-            .setWakeMode(C.WAKE_MODE_LOCAL)
-            .setHandleAudioBecomingNoisy(true)
-            .setTrackSelector(DefaultTrackSelector(context))
-            .setMediaSourceFactory(mediaSourceFactory)
-            .build()
-
-    @Provides
-    @Singleton
-    fun provideNotificationManager(
-        @ApplicationContext context: Context,
-        player: ExoPlayer
-    ): SimpleMediaNotificationManager =
-        SimpleMediaNotificationManager(
-            context = context,
-            player = player
-        )
-
-    @Provides
-    @Singleton
-    fun provideMediaSession(
-        @ApplicationContext context: Context,
-        player: ExoPlayer
-    ): MediaSession =
-        MediaSession.Builder(context, player)
-            .build()
-
-//    @Provides
-//    @Singleton
-//    fun provideMediaLibrarySession(@ApplicationContext context: Context): MediaLibrarySession =
-//        MediaLibrarySession.Builder().build()
-
-    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    @Provides
-    @Singleton
-    fun provideServiceHandler(
-        player: ExoPlayer
-    ): SimpleMediaServiceHandler =
-        SimpleMediaServiceHandler(
-            player = player
-        )
-
-    @Provides
-    @Singleton
-    fun provideMusicSource(
-        simpleMediaServiceHandler: SimpleMediaServiceHandler, dataStoreManager: DataStoreManager, mainRepository: MainRepository
-    ): MusicSource =
-        MusicSource(simpleMediaServiceHandler, dataStoreManager, mainRepository)
+        mainRepository: MainRepository
+    ): SimpleMediaSessionCallback = SimpleMediaSessionCallback(context, mainRepository)
 }

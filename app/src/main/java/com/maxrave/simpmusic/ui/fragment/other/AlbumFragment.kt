@@ -39,6 +39,7 @@ import com.maxrave.simpmusic.data.db.entities.SongEntity
 import com.maxrave.simpmusic.data.model.browse.album.Track
 import com.maxrave.simpmusic.data.queue.Queue
 import com.maxrave.simpmusic.databinding.FragmentAlbumBinding
+import com.maxrave.simpmusic.extension.navigateSafe
 import com.maxrave.simpmusic.extension.toAlbumEntity
 import com.maxrave.simpmusic.extension.toArrayListTrack
 import com.maxrave.simpmusic.extension.toListVideoId
@@ -53,6 +54,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.math.abs
+import kotlin.random.Random
 
 @AndroidEntryPoint
 @UnstableApi
@@ -130,7 +132,7 @@ class AlbumFragment: Fragment() {
                 Log.d("TAG", "Artist name clicked: ${viewModel.albumBrowse.value?.data?.artists?.get(0)?.id}")
                 val args = Bundle()
                 args.putString("channelId", viewModel.albumBrowse.value?.data?.artists?.get(0)?.id)
-                findNavController().navigate(R.id.action_global_artistFragment, args)
+                findNavController().navigateSafe(R.id.action_global_artistFragment, args)
             }
         }
         binding.cbLove.setOnCheckedChangeListener { cb, isChecked ->
@@ -139,6 +141,49 @@ class AlbumFragment: Fragment() {
             }
             else {
                 viewModel.albumEntity.value?.let { album -> viewModel.updateAlbumLiked(true, album.browseId) }
+            }
+        }
+        binding.btShuffle.setOnClickListener {
+            if (viewModel.albumBrowse.value is Resource.Success && viewModel.albumBrowse.value?.data != null){
+                val args = Bundle()
+                val index = Random.nextInt(viewModel.albumBrowse.value?.data!!.tracks.size)
+                args.putString("type", Config.ALBUM_CLICK)
+                args.putString("videoId", viewModel.albumBrowse.value?.data!!.tracks[index].videoId)
+                args.putString("from", "Album \"${viewModel.albumBrowse.value?.data!!.title}\"")
+                if (viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
+                    args.putInt("downloaded", 1)
+                }
+                args.putString("playlistId", viewModel.albumBrowse.value?.data?.audioPlaylistId?.replaceFirst("VL", ""))
+                Queue.clear()
+                Queue.setNowPlaying(viewModel.albumBrowse.value?.data!!.tracks[index])
+                val shuffleList: ArrayList<Track> = arrayListOf()
+                shuffleList.addAll(viewModel.albumBrowse.value?.data!!.tracks)
+                shuffleList.remove(viewModel.albumBrowse.value?.data!!.tracks[index])
+                shuffleList.shuffle()
+                Queue.addAll(shuffleList)
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
+            }
+            else if (viewModel.albumEntity.value != null && viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED){
+                val args = Bundle()
+                val index = Random.nextInt(viewModel.albumEntity.value?.tracks?.size!!)
+                args.putString("type", Config.ALBUM_CLICK)
+                args.putString("videoId", viewModel.albumEntity.value?.tracks?.get(index))
+                args.putString("from", "Album \"${viewModel.albumEntity.value?.title}\"")
+                if (viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
+                    args.putInt("downloaded", 1)
+                }
+                args.putString("playlistId", viewModel.albumEntity.value?.browseId?.replaceFirst("VL", ""))
+                Queue.clear()
+                Queue.setNowPlaying(viewModel.listTrack.value?.get(index)!!.toTrack())
+                val shuffleList: ArrayList<Track> = arrayListOf()
+                shuffleList.addAll(viewModel.listTrack.value.toArrayListTrack())
+                shuffleList.remove(viewModel.listTrack.value?.get(index)!!.toTrack())
+                shuffleList.shuffle()
+                Queue.addAll(shuffleList)
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
+            }
+            else {
+                Snackbar.make(requireView(), "Error", Snackbar.LENGTH_SHORT).show()
             }
         }
         binding.btPlayPause.setOnClickListener {
@@ -150,13 +195,14 @@ class AlbumFragment: Fragment() {
                 if (viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
                     args.putInt("downloaded", 1)
                 }
+                args.putString("playlistId", viewModel.albumBrowse.value?.data?.audioPlaylistId?.replaceFirst("VL", ""))
                 Queue.clear()
                 Queue.setNowPlaying(viewModel.albumBrowse.value?.data!!.tracks[0])
                 Queue.addAll(viewModel.albumBrowse.value?.data!!.tracks as ArrayList<Track>)
                 if (Queue.getQueue().size >= 1) {
                     Queue.removeFirstTrackForPlaylistAndAlbum()
                 }
-                findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
             }
             else if (viewModel.albumEntity.value != null && viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED){
                 val args = Bundle()
@@ -166,13 +212,14 @@ class AlbumFragment: Fragment() {
                 if (viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
                     args.putInt("downloaded", 1)
                 }
+                args.putString("playlistId", viewModel.albumEntity.value?.browseId?.replaceFirst("VL", ""))
                 Queue.clear()
                 Queue.setNowPlaying(viewModel.listTrack.value?.get(0)!!.toTrack())
                 Queue.addAll(viewModel.listTrack.value.toArrayListTrack())
                 if (Queue.getQueue().size >= 1) {
                     Queue.removeFirstTrackForPlaylistAndAlbum()
                 }
-                findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
             }
             else {
                 Snackbar.make(requireView(), "Error", Snackbar.LENGTH_SHORT).show()
@@ -185,32 +232,36 @@ class AlbumFragment: Fragment() {
                     args.putString("type", Config.ALBUM_CLICK)
                     args.putString("videoId", viewModel.albumBrowse.value?.data!!.tracks[position].videoId)
                     args.putString("from", "Album \"${viewModel.albumBrowse.value?.data!!.title}\"")
+                    args.putInt("index", position)
                     if (viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
                         args.putInt("downloaded", 1)
                     }
+                    args.putString("playlistId", viewModel.albumBrowse.value?.data?.audioPlaylistId?.replaceFirst("VL", ""))
                     Queue.clear()
                     Queue.setNowPlaying(viewModel.albumBrowse.value?.data!!.tracks[position])
                     Queue.addAll(viewModel.albumBrowse.value?.data!!.tracks as ArrayList<Track>)
                     if (Queue.getQueue().size >= 1) {
                         Queue.removeTrackWithIndex(position)
                     }
-                    findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                    findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
                 }
                 else if (viewModel.albumEntity.value != null && viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED){
                     val args = Bundle()
                     args.putString("type", Config.ALBUM_CLICK)
                     args.putString("videoId", viewModel.albumEntity.value?.tracks?.get(position))
                     args.putString("from", "Album \"${viewModel.albumEntity.value?.title}\"")
+                    args.putInt("index", position)
                     if (viewModel.albumEntity.value?.downloadState == DownloadState.STATE_DOWNLOADED) {
                         args.putInt("downloaded", 1)
                     }
+                    args.putString("playlistId", viewModel.albumEntity.value?.browseId?.replaceFirst("VL", ""))
                     Queue.clear()
                     Queue.setNowPlaying(viewModel.listTrack.value?.get(position)!!.toTrack())
                     Queue.addAll(viewModel.listTrack.value.toArrayListTrack())
                     if (Queue.getQueue().size >= 1) {
                         Queue.removeTrackWithIndex(position)
                     }
-                    findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                    findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
                 }
                 else {
                     Snackbar.make(requireView(), "Error", Snackbar.LENGTH_SHORT).show()
@@ -353,8 +404,7 @@ class AlbumFragment: Fragment() {
                             btArtist.text = it?.artists?.get(0)?.name
                             tvYearAndCategory.text= context?.getString(R.string.year_and_category, it?.year, it?.type)
                             tvTrackCountAndDuration.text = context?.getString(R.string.album_length, it?.trackCount.toString(), it?.duration)
-                            tvDescription.originalText = it?.description.toString()
-                            if (it?.description == null){
+                            if (it?.description == null || it.description == ""){
                                 tvDescription.originalText = "No description"
                             }
                             else {
@@ -376,7 +426,7 @@ class AlbumFragment: Fragment() {
                             binding.loadingLayout.visibility = View.GONE
                             val albumEntity = viewModel.albumEntity.value
                             if (albumEntity != null) {
-                                viewModel.checkAllSongDownloaded(it?.tracks as ArrayList<Track>)
+                                viewModel.checkAllSongDownloaded(it.tracks as ArrayList<Track>)
                                 viewModel.albumEntity.observe(viewLifecycleOwner){albumEntity2 ->
                                     when (albumEntity2.downloadState) {
                                         DownloadState.STATE_DOWNLOADED -> {
@@ -423,9 +473,8 @@ class AlbumFragment: Fragment() {
                                     btArtist.text = it.artists[0].name
                                     tvYearAndCategory.text= context?.getString(R.string.year_and_category, it.year, it.type)
                                     tvTrackCountAndDuration.text = context?.getString(R.string.album_length, it.trackCount.toString(), it.duration)
-                                    tvDescription.originalText = it.description.toString()
-                                    if (it.description == null){
-                                        tvDescription.originalText = "No description"
+                                    if (it.description == null || it.description == ""){
+                                        tvDescription.originalText = getString(R.string.no_description)
                                     }
                                     else {
                                         tvDescription.originalText = it.description.toString()
@@ -503,9 +552,8 @@ class AlbumFragment: Fragment() {
                     btArtist.text = albumEntity.artistName?.get(0) ?: "Unknown"
                     tvYearAndCategory.text= context?.getString(R.string.year_and_category, albumEntity.year, albumEntity.type)
                     tvTrackCountAndDuration.text = context?.getString(R.string.album_length, albumEntity.trackCount.toString(), albumEntity.duration)
-                    tvDescription.originalText = albumEntity.description.toString()
-                    if (albumEntity.description == null){
-                        tvDescription.originalText = "No description"
+                    if (albumEntity.description == ""){
+                        tvDescription.originalText = getString(R.string.no_description)
                     }
                     else {
                         tvDescription.originalText = albumEntity.description.toString()

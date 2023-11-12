@@ -1,5 +1,6 @@
 package com.maxrave.kotlinytmusicscraper.pages
 
+import android.util.Log
 import com.maxrave.kotlinytmusicscraper.models.Album
 import com.maxrave.kotlinytmusicscraper.models.AlbumItem
 import com.maxrave.kotlinytmusicscraper.models.Artist
@@ -12,6 +13,7 @@ import com.maxrave.kotlinytmusicscraper.models.MusicTwoRowItemRenderer
 import com.maxrave.kotlinytmusicscraper.models.PlaylistItem
 import com.maxrave.kotlinytmusicscraper.models.SectionListRenderer
 import com.maxrave.kotlinytmusicscraper.models.SongItem
+import com.maxrave.kotlinytmusicscraper.models.VideoItem
 import com.maxrave.kotlinytmusicscraper.models.YTItem
 import com.maxrave.kotlinytmusicscraper.models.oddElements
 
@@ -49,7 +51,8 @@ data class ArtistPage(
 
         private fun fromMusicCarouselShelfRenderer(renderer: MusicCarouselShelfRenderer): ArtistSection? {
             return ArtistSection(
-                title = renderer.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs?.firstOrNull()?.text ?: return null,
+                title = renderer.header?.musicCarouselShelfBasicHeaderRenderer?.title?.runs?.firstOrNull()?.text
+                    ?: return null,
                 items = renderer.contents.mapNotNull {
                     it.musicTwoRowItemRenderer?.let { renderer ->
                         fromMusicTwoRowItemRenderer(renderer)
@@ -59,17 +62,20 @@ data class ArtistPage(
             )
         }
 
-        private fun fromMusicResponsiveListItemRenderer(renderer: MusicResponsiveListItemRenderer): SongItem? {
-            return SongItem(
-                id = renderer.playlistItemData?.videoId ?: return null,
-                title = renderer.flexColumns.firstOrNull()
-                    ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()
-                    ?.text ?: return null,
-                artists = renderer.flexColumns.getOrNull(1)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.oddElements()?.map {
-                    Artist(
-                        name = it.text,
-                        id = it.navigationEndpoint?.browseEndpoint?.browseId
-                    )
+        private fun fromMusicResponsiveListItemRenderer(renderer: MusicResponsiveListItemRenderer?): SongItem? {
+            if (renderer == null) return null
+            else
+                return SongItem(
+                    id = renderer.playlistItemData?.videoId ?: return null,
+                    title = renderer.flexColumns.firstOrNull()
+                        ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()
+                        ?.text ?: return null,
+                    artists = renderer.flexColumns.getOrNull(1)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.oddElements()
+                        ?.map {
+                            Artist(
+                                name = it.text,
+                                id = it.navigationEndpoint?.browseEndpoint?.browseId
+                            )
                 } ?: return null,
                 album = renderer.flexColumns.getOrNull(2)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.let {
                     Album(
@@ -85,7 +91,7 @@ data class ArtistPage(
             )
         }
 
-        private fun fromMusicTwoRowItemRenderer(renderer: MusicTwoRowItemRenderer): YTItem? {
+        fun fromMusicTwoRowItemRenderer(renderer: MusicTwoRowItemRenderer): YTItem? {
             return when {
                 renderer.isSong -> {
                     SongItem(
@@ -158,6 +164,28 @@ data class ArtistPage(
                             it.menuNavigationItemRenderer?.icon?.iconType == "MIX"
                         }?.menuNavigationItemRenderer?.navigationEndpoint?.watchPlaylistEndpoint ?: return null,
                         subscribers = renderer.subtitle?.runs?.firstOrNull()?.text ?: return null,
+                    )
+                }
+                renderer.isVideo -> {
+                    Log.d("ArtistPage", "isVideo")
+                    VideoItem(
+                        id = renderer.navigationEndpoint.watchEndpoint?.videoId ?: return null,
+                        title = renderer.title.runs?.get(0)?.text ?: return null,
+                        thumbnail = renderer.thumbnailRenderer.musicThumbnailRenderer?.getThumbnailUrl() ?: return null,
+                        endpoint = renderer.navigationEndpoint.watchEndpoint,
+                        thumbnails = renderer.thumbnailRenderer.musicThumbnailRenderer.thumbnail,
+                        artists = renderer.subtitle?.runs?.let {list ->
+                            val artist = mutableListOf<Artist>()
+                            for (i in list.indices) {
+                                if (i % 2 == 0 && i != list.lastIndex) {
+                                    artist.add(Artist(list[i].text, list[i].navigationEndpoint?.browseEndpoint?.browseId))
+                                }
+                            }
+                            artist
+                        } ?: listOf(),
+                        album = null,
+                        duration = null,
+                        view = renderer.subtitle?.runs?.lastOrNull()?.text
                     )
                 }
 

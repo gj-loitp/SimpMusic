@@ -5,7 +5,6 @@ import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
-import com.maxrave.simpmusic.R
 import com.maxrave.simpmusic.data.model.home.chart.ItemVideo
 import com.maxrave.simpmusic.databinding.ItemTrackChartBinding
 
@@ -36,7 +35,7 @@ class TrackChartAdapter( var trackList: ArrayList<ItemVideo>, val context: Conte
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val track = trackList[position]
         with(holder){
-            binding.tvView.text = context.getString(R.string.view_count, track.views)
+            binding.tvView.text = track.views
             binding.tvRank.text = (position + 1).toString()
             binding.tvTitle.text = track.title
             var artistName = ""
@@ -48,7 +47,7 @@ class TrackChartAdapter( var trackList: ArrayList<ItemVideo>, val context: Conte
             artistName = removeTrailingComma(artistName)
             artistName = removeComma(artistName)
             binding.tvArtistName.text = artistName
-            binding.ivArt.load(track.thumbnails.last().url)
+            binding.ivArt.load(track.thumbnails.lastOrNull()?.url)
         }
     }
     private fun removeTrailingComma(sentence: String): String {

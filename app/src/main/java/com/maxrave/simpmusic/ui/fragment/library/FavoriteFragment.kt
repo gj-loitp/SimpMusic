@@ -3,12 +3,12 @@ package com.maxrave.simpmusic.ui.fragment.library
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
-import androidx.fragment.app.Fragment
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.core.net.toUri
+import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
@@ -26,6 +26,7 @@ import com.maxrave.simpmusic.adapter.search.SearchItemAdapter
 import com.maxrave.simpmusic.common.Config
 import com.maxrave.simpmusic.common.DownloadState
 import com.maxrave.simpmusic.data.db.entities.LocalPlaylistEntity
+import com.maxrave.simpmusic.data.db.entities.PairSongLocalPlaylist
 import com.maxrave.simpmusic.data.db.entities.SongEntity
 import com.maxrave.simpmusic.data.model.browse.album.Track
 import com.maxrave.simpmusic.data.model.searchResult.songs.Artist
@@ -35,6 +36,7 @@ import com.maxrave.simpmusic.databinding.BottomSheetNowPlayingBinding
 import com.maxrave.simpmusic.databinding.BottomSheetSeeArtistOfNowPlayingBinding
 import com.maxrave.simpmusic.databinding.FragmentFavoriteBinding
 import com.maxrave.simpmusic.extension.connectArtists
+import com.maxrave.simpmusic.extension.navigateSafe
 import com.maxrave.simpmusic.extension.removeConflicts
 import com.maxrave.simpmusic.extension.setEnabledAll
 import com.maxrave.simpmusic.extension.toTrack
@@ -43,6 +45,7 @@ import com.maxrave.simpmusic.viewModel.FavoriteViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import dev.chrisbanes.insetter.applyInsetter
 import kotlinx.coroutines.launch
+import java.time.LocalDateTime
 
 @AndroidEntryPoint
 class FavoriteFragment : Fragment() {
@@ -103,13 +106,14 @@ class FavoriteFragment : Fragment() {
                 Queue.setNowPlaying(song.toTrack())
                 Queue.addAll(listLiked.map { (it as SongEntity).toTrack()} as ArrayList<Track>)
                 Queue.removeTrackWithIndex(position)
-                findNavController().navigate(R.id.action_global_nowPlayingFragment, args)
+                findNavController().navigateSafe(R.id.action_global_nowPlayingFragment, args)
             }
 
             override fun onOptionsClick(position: Int, type: String) {
                 val dialog = BottomSheetDialog(requireContext())
                 val bottomSheetView = BottomSheetNowPlayingBinding.inflate(layoutInflater)
                 with(bottomSheetView) {
+                    btSleepTimer.visibility = View.GONE
                     tvFavorite.text = getString(R.string.liked)
                     cbFavorite.isChecked = true
                     val song = listLiked[position] as SongEntity
@@ -134,7 +138,7 @@ class FavoriteFragment : Fragment() {
                         DownloadState.STATE_DOWNLOADING -> {
                             tvDownload.text = getString(R.string.downloading)
                             ivDownload.setImageResource(R.drawable.baseline_downloading_white)
-                            setEnabledAll(btDownload, false)
+                            setEnabledAll(btDownload, true)
                         }
 
                         DownloadState.STATE_DOWNLOADED -> {
@@ -143,7 +147,17 @@ class FavoriteFragment : Fragment() {
                             setEnabledAll(btDownload, true)
                         }
                     }
-
+                    btChangeLyricsProvider.visibility = View.GONE
+                    btRadio.setOnClickListener {
+                        val args = Bundle()
+                        args.putString("radioId", "RDAMVM${song.videoId}")
+                        args.putString(
+                            "videoId",
+                            song.videoId
+                        )
+                        dialog.dismiss()
+                        findNavController().navigateSafe(R.id.action_global_playlistFragment, args)
+                    }
                     btLike.setOnClickListener {
                         if (cbFavorite.isChecked){
                             cbFavorite.isChecked = false
@@ -188,7 +202,7 @@ class FavoriteFragment : Fragment() {
                                 override fun onItemClick(position: Int) {
                                     val artist = tempArtist[position]
                                     if (artist.id != null) {
-                                        findNavController().navigate(R.id.action_global_artistFragment, Bundle().apply {
+                                        findNavController().navigateSafe(R.id.action_global_artistFragment, Bundle().apply {
                                             putString("channelId", artist.id)
                                         })
                                         subDialog.dismiss()
@@ -223,8 +237,20 @@ class FavoriteFragment : Fragment() {
                             override fun onItemClick(position: Int) {
                                 val playlist = listLocalPlaylist[position]
                                 val tempTrack = ArrayList<String>()
+                                viewModel.updateInLibrary(song.videoId)
                                 if (playlist.tracks != null) {
                                     tempTrack.addAll(playlist.tracks)
+                                }
+                                if (!tempTrack.contains(song.videoId) && playlist.syncedWithYouTubePlaylist == 1 && playlist.youtubePlaylistId != null) {
+                                    viewModel.addToYouTubePlaylist(playlist.id, playlist.youtubePlaylistId, song.videoId)
+                                }
+                                if (!tempTrack.contains(song.videoId)) {
+                                    viewModel.insertPairSongLocalPlaylist(
+                                        PairSongLocalPlaylist(
+                                            playlistId = playlist.id, songId = song.videoId, position = tempTrack.size, inPlaylist = LocalDateTime.now()
+                                        )
+                                    )
+                                    tempTrack.add(song.videoId)
                                 }
                                 tempTrack.add(song.videoId)
                                 tempTrack.removeConflicts()
@@ -271,7 +297,7 @@ class FavoriteFragment : Fragment() {
                                                 )
                                                 tvDownload.text = getString(R.string.downloading)
                                                 ivDownload.setImageResource(R.drawable.baseline_downloading_white)
-                                                setEnabledAll(btDownload, false)
+                                                setEnabledAll(btDownload, true)
                                             }
 
                                             Download.STATE_FAILED -> {
@@ -312,7 +338,7 @@ class FavoriteFragment : Fragment() {
                                 }
                             }
                         }
-                        else if (tvDownload.text == getString(R.string.downloaded)){
+                        else if (tvDownload.text == getString(R.string.downloaded) || tvDownload.text == getString(R.string.downloading)){
                             DownloadService.sendRemoveDownload(
                                 requireContext(),
                                 MusicDownloadService::class.java,

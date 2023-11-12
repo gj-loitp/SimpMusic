@@ -1,5 +1,7 @@
 package com.maxrave.simpmusic.common
 
+import com.maxrave.simpmusic.R
+
 object Config {
     enum class SyncState {
         LINE_SYNCED,
@@ -16,8 +18,8 @@ object Config {
     const val ALBUM_CLICK = "ALBUM_CLICK"
     const val RADIO_CLICK = "RADIO_CLICK"
     const val MINIPLAYER_CLICK = "MINIPLAYER_CLICK"
-
-    const val VN = "VN"
+    const val SHARE = "SHARE"
+    const val RECOVER_TRACK_QUEUE = "RECOVER_TRACK_QUEUE"
 
 }
 
@@ -41,13 +43,68 @@ object SUPPORTED_LOCATION {
         "TN", "TR", "TW", "TZ", "UA", "UG", "US", "UY", "VE", "VN", "YE", "ZA", "ZW")
 }
 object SUPPORTED_LANGUAGE {
-    val items: Array<CharSequence> = arrayOf("English", "Vietnamese")
-    val codes: Array<String> = arrayOf("en-US", "vi-VN")
-    val serverCodes: Array<String> = arrayOf("en", "vi_VN")
+    val items: Array<CharSequence> = arrayOf(
+        "English",
+        "Tiếng Việt",
+        "Italiano",
+        "Deutsch",
+        "Русский",
+        "Türkçe",
+        "Suomi",
+        "Polski",
+        "Português",
+        "Français",
+        "Español"
+    )
+    val codes: Array<String> = arrayOf(
+        "en-US",
+        "vi-VN",
+        "it-IT",
+        "de-DE",
+        "ru-RU",
+        "tr-TR",
+        "fi-FI",
+        "pl-PL",
+        "pt-PT",
+        "fr-FR",
+        "es-ES"
+    )
 }
 object QUALITY {
     val items: Array<CharSequence> = arrayOf("Low - 66kps", "High - 129kps")
     val itags: Array<Int> = arrayOf(250, 251)
+}
+object LYRICS_PROVIDER {
+    val items: Array<CharSequence> = arrayOf("Musixmatch", "YouTube Transcript")
+}
+object LIMIT_CACHE_SIZE {
+    val items: Array<CharSequence> = arrayOf("100MB", "250MB", "500MB", "1GB", "2GB", "5GB", "8GB", "∞")
+    val data: Array<Int> = arrayOf(100, 250, 500, 1000, 2000, 5000, 8000, -1)
+}
+
+object SPONSOR_BLOCK {
+    val list: Array<CharSequence> = arrayOf("sponsor", "selfpromo", "interaction", "intro", "outro", "preview", "music_offtopic", "poi_highlight", "filler")
+    val listName: Array<Int> = arrayOf(
+        R.string.sponsor,
+        R.string.self_promotion,
+        R.string.interaction,
+        R.string.intro,
+        R.string.outro,
+        R.string.preview,
+        R.string.music_off_topic,
+        R.string.poi_highlight,
+        R.string.filler)
+}
+
+object MEDIA_CUSTOM_COMMAND {
+    const val LIKE = "like"
+    const val REPEAT = "repeat"
+}
+
+object MEDIA_NOTIFICATION {
+    const val NOTIFICATION_ID = 200
+    const val NOTIFICATION_CHANNEL_NAME = "SimpMusic Playback Notification"
+    const val NOTIFICATION_CHANNEL_ID = "SimpMusic Playback Notification ID"
 }
 
 const val SETTINGS_FILENAME = "settings"

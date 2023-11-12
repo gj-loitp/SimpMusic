@@ -9,10 +9,14 @@ import androidx.room.Transaction
 import androidx.sqlite.db.SupportSQLiteQuery
 import com.maxrave.simpmusic.data.db.entities.AlbumEntity
 import com.maxrave.simpmusic.data.db.entities.ArtistEntity
+import com.maxrave.simpmusic.data.db.entities.FormatEntity
 import com.maxrave.simpmusic.data.db.entities.LocalPlaylistEntity
 import com.maxrave.simpmusic.data.db.entities.LyricsEntity
+import com.maxrave.simpmusic.data.db.entities.PairSongLocalPlaylist
 import com.maxrave.simpmusic.data.db.entities.PlaylistEntity
+import com.maxrave.simpmusic.data.db.entities.QueueEntity
 import com.maxrave.simpmusic.data.db.entities.SearchHistory
+import com.maxrave.simpmusic.data.db.entities.SetVideoIdEntity
 import com.maxrave.simpmusic.data.db.entities.SongEntity
 import com.maxrave.simpmusic.extension.toSQLiteQuery
 import java.time.LocalDateTime
@@ -121,11 +125,14 @@ interface DatabaseDao {
     @Query("UPDATE song SET downloadState = :downloadState WHERE videoId = :videoId")
     suspend fun updateDownloadState(downloadState: Int, videoId: String)
 
+    @Query("UPDATE song SET durationSeconds = :durationSeconds WHERE videoId = :videoId")
+    suspend fun updateDurationSeconds(durationSeconds: Int, videoId: String)
+
     @Query("SELECT * FROM song WHERE downloadState = 3")
-    suspend fun getDownloadedSongs(): List<SongEntity>
+    suspend fun getDownloadedSongs(): List<SongEntity>?
 
     @Query("SELECT * FROM song WHERE downloadState = 1 OR downloadState = 2")
-    suspend fun getDownloadingSongs(): List<SongEntity>
+    suspend fun getDownloadingSongs(): List<SongEntity>?
 
     @Query("SELECT * FROM song WHERE videoId IN (:primaryKeyList)")
     fun getSongByListVideoId(primaryKeyList: List<String>): List<SongEntity>
@@ -187,6 +194,9 @@ interface DatabaseDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertPlaylist(playlist: PlaylistEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRadioPlaylist(playlist: PlaylistEntity)
+
     @Query("UPDATE playlist SET liked = :liked WHERE id = :playlistId")
     suspend fun updatePlaylistLiked(liked: Int, playlistId: String)
 
@@ -230,6 +240,15 @@ interface DatabaseDao {
     @Query("SELECT * FROM local_playlist WHERE downloadState = 3")
     suspend fun getDownloadedLocalPlaylists(): List<LocalPlaylistEntity>
 
+    @Query("UPDATE local_playlist SET youtubePlaylistId = :youtubePlaylistId WHERE id = :id")
+    suspend fun updateLocalPlaylistYouTubePlaylistId(id: Long, youtubePlaylistId: String?)
+
+    @Query("UPDATE local_playlist SET synced_with_youtube_playlist = :synced WHERE id = :id")
+    suspend fun updateLocalPlaylistYouTubePlaylistSynced(id: Long, synced: Int)
+
+    @Query("UPDATE local_playlist SET youtube_sync_state = :state WHERE id = :id")
+    suspend fun updateLocalPlaylistYouTubePlaylistSyncState(id: Long, state: Int)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLyrics(lyrics: LyricsEntity)
 
@@ -245,4 +264,40 @@ interface DatabaseDao {
 
     @Query("SELECT * FROM song WHERE downloadState = 1")
     suspend fun getPreparingSongs(): List<SongEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFormat(format: FormatEntity)
+
+    @Query("SELECT * FROM format WHERE videoId = :videoId")
+    suspend fun getFormat(videoId: String): FormatEntity?
+
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun recoverQueue(queue: QueueEntity)
+
+    @Query("DELETE FROM queue")
+    suspend fun deleteQueue()
+
+    @Query("SELECT * FROM queue")
+    suspend fun getQueue(): List<QueueEntity>?
+
+    @Query("SELECT * FROM local_playlist WHERE youtubePlaylistId = :youtubePlaylistId")
+    suspend fun getLocalPlaylistByYoutubePlaylistId(youtubePlaylistId: String): LocalPlaylistEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSetVideoId(setVideoIdEntity: SetVideoIdEntity)
+
+    @Query("SELECT * FROM set_video_id WHERE videoId = :videoId")
+    suspend fun getSetVideoId(videoId: String): SetVideoIdEntity?
+
+    //PairSongLocalPlaylist
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPairSongLocalPlaylist(pairSongLocalPlaylist: PairSongLocalPlaylist)
+
+    @Query("SELECT * FROM pair_song_local_playlist WHERE playlistId = :playlistId")
+    suspend fun getPlaylistPairSong(playlistId: Long): List<PairSongLocalPlaylist>?
+
+    @Query("DELETE FROM pair_song_local_playlist WHERE songId = :videoId AND playlistId = :playlistId")
+    suspend fun deletePairSongLocalPlaylist(playlistId: Long, videoId: String)
+
 }
